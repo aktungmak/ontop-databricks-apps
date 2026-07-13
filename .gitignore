@@ -1,0 +1,11 @@
+artifacts/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.DS_Store
+.databricks/
+.claude/
+.cursor/
+.vscode/

@@ -1,0 +1,219 @@
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.org/tpch/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<#Customer> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.customer" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/customer/{c_custkey}" ;
+    rr:class ex:Customer
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:custKey ;
+    rr:objectMap [
+      rr:column "c_custkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:name ;
+    rr:objectMap [ rr:column "c_name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:address ;
+    rr:objectMap [ rr:column "c_address" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:nationKey ;
+    rr:objectMap [
+      rr:column "c_nationkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:phone ;
+    rr:objectMap [ rr:column "c_phone" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:accountBalance ;
+    rr:objectMap [
+      rr:column "c_acctbal" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:marketSegment ;
+    rr:objectMap [ rr:column "c_mktsegment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "c_comment" ]
+  ] .
+
+<#Order> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.orders" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/order/{o_orderkey}" ;
+    rr:class ex:Order
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:orderKey ;
+    rr:objectMap [
+      rr:column "o_orderkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:orderStatus ;
+    rr:objectMap [ rr:column "o_orderstatus" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:totalPrice ;
+    rr:objectMap [
+      rr:column "o_totalprice" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:orderDate ;
+    rr:objectMap [
+      rr:column "o_orderdate" ;
+      rr:datatype xsd:date
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:orderPriority ;
+    rr:objectMap [ rr:column "o_orderpriority" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:clerk ;
+    rr:objectMap [ rr:column "o_clerk" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:shipPriority ;
+    rr:objectMap [
+      rr:column "o_shippriority" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "o_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:placedBy ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Customer> ;
+      rr:joinCondition [
+        rr:child "o_custkey" ;
+        rr:parent "c_custkey"
+      ]
+    ]
+  ] .
+
+<#LineItem> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.lineitem" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/lineitem/{l_orderkey}/{l_linenumber}" ;
+    rr:class ex:LineItem
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:lineNumber ;
+    rr:objectMap [
+      rr:column "l_linenumber" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:partKey ;
+    rr:objectMap [
+      rr:column "l_partkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:supplierKey ;
+    rr:objectMap [
+      rr:column "l_suppkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:quantity ;
+    rr:objectMap [
+      rr:column "l_quantity" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:extendedPrice ;
+    rr:objectMap [
+      rr:column "l_extendedprice" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:discount ;
+    rr:objectMap [
+      rr:column "l_discount" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:tax ;
+    rr:objectMap [
+      rr:column "l_tax" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:returnFlag ;
+    rr:objectMap [ rr:column "l_returnflag" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:lineStatus ;
+    rr:objectMap [ rr:column "l_linestatus" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:shipDate ;
+    rr:objectMap [
+      rr:column "l_shipdate" ;
+      rr:datatype xsd:date
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:commitDate ;
+    rr:objectMap [
+      rr:column "l_commitdate" ;
+      rr:datatype xsd:date
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:receiptDate ;
+    rr:objectMap [
+      rr:column "l_receiptdate" ;
+      rr:datatype xsd:date
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:shipInstruct ;
+    rr:objectMap [ rr:column "l_shipinstruct" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:shipMode ;
+    rr:objectMap [ rr:column "l_shipmode" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "l_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:partOfOrder ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Order> ;
+      rr:joinCondition [
+        rr:child "l_orderkey" ;
+        rr:parent "o_orderkey"
+      ]
+    ]
+  ] .

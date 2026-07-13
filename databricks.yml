@@ -1,0 +1,97 @@
+bundle:
+  name: ontop-vkg
+
+variables:
+  catalog:
+    description: UC catalog for volume
+    default: ontop_vkg
+    value: tagsonomy
+  schema:
+    description: UC schema for volume
+    default: default
+    value: ontop
+  warehouse_cluster_size:
+    default: Small
+  ontop_version:
+    default: "5.5.0"
+  jdbc_version:
+    default: "2.7.5"
+  jre_version:
+    default: "17.0.19_10"
+  mapping_file:
+    default: mapping.ttl
+  ontology_file:
+    default: ontology.ttl
+
+targets:
+  volume:
+    default: true
+    mode: production
+    workspace:
+      profile: DEFAULT
+    resources:
+      volumes:
+        ontop_vkg_data:
+          catalog_name: ${var.catalog}
+          schema_name: ${var.schema}
+          name: ontop_vkg
+          volume_type: MANAGED
+
+  mappings:
+    mode: production
+    workspace:
+      profile: DEFAULT
+      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg/mappings
+    artifacts:
+      mappings:
+        path: ./mappings
+        files:
+          - source: ./mappings/mapping.ttl
+          - source: ./mappings/ontology.ttl
+
+  app:
+    mode: production
+    workspace:
+      profile: DEFAULT
+      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg/artifacts
+    artifacts:
+      ontop_runtime:
+        path: .
+        executable: bash
+        build: |
+          ONTOP_VERSION=${var.ontop_version} \
+          JDBC_VERSION=${var.jdbc_version} \
+          JRE_VERSION=${var.jre_version} \
+          ./scripts/download-artifacts.sh
+        files:
+          - source: ./artifacts/ontop-cli-*.zip
+          - source: ./artifacts/OpenJDK*jre*.tar.gz
+          - source: ./artifacts/DatabricksJDBC42.jar
+    resources:
+      sql_warehouses:
+        ontop_vkg_warehouse:
+          name: ontop-vkg-wh
+          warehouse_type: PRO
+          enable_serverless_compute: true
+          cluster_size: ${var.warehouse_cluster_size}
+          auto_stop_mins: 10
+          min_num_clusters: 1
+          max_num_clusters: 1
+          lifecycle:
+            started: true
+
+      apps:
+        ontop_vkg:
+          name: ontop-vkg
+          description: Ontop VKG SPARQL endpoint over DBSQL
+          source_code_path: ./src/app
+          resources:
+            - name: sql-warehouse
+              sql_warehouse:
+                id: ${resources.sql_warehouses.ontop_vkg_warehouse.id}
+                permission: CAN_USE
+            - name: mappings-volume
+              uc_securable:
+                securable_type: VOLUME
+                securable_full_name: ${var.catalog}.${var.schema}.ontop_vkg
+                permission: READ_VOLUME

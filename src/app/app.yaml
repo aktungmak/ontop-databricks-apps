@@ -1,0 +1,15 @@
+command:
+  - python
+  - main.py
+
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: MAPPINGS_VOLUME_PATH
+    valueFrom: mappings-volume
+  - name: VKG_MAPPING_FILE
+    value: mapping.ttl
+  - name: VKG_ONTOLOGY_FILE
+    value: ontology.ttl
+  - name: ONTOP_INTERNAL_PORT
+    value: "18080"

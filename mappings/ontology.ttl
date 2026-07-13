@@ -1,0 +1,199 @@
+@prefix ex: <http://example.org/tpch/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex: a owl:Ontology ;
+  rdfs:label "TPC-H sample ontology" ;
+  rdfs:comment "Lightweight schema for the TPC-H customer, order, and line item VKG mapping." .
+
+### Classes
+
+ex:Customer a owl:Class ;
+  rdfs:label "Customer" ;
+  rdfs:comment "A TPC-H customer who places orders." .
+
+ex:Order a owl:Class ;
+  rdfs:label "Order" ;
+  rdfs:comment "A customer order consisting of one or more line items." .
+
+ex:LineItem a owl:Class ;
+  rdfs:label "Line item" ;
+  rdfs:comment "A single line on an order." .
+
+### Object properties
+
+ex:placedBy a owl:ObjectProperty ;
+  rdfs:label "placed by" ;
+  rdfs:domain ex:Order ;
+  rdfs:range ex:Customer ;
+  owl:inverseOf ex:placesOrder .
+
+ex:placesOrder a owl:ObjectProperty ;
+  rdfs:label "places order" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range ex:Order .
+
+ex:partOfOrder a owl:ObjectProperty ;
+  rdfs:label "part of order" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range ex:Order ;
+  owl:inverseOf ex:hasLineItem .
+
+ex:hasLineItem a owl:ObjectProperty ;
+  rdfs:label "has line item" ;
+  rdfs:domain ex:Order ;
+  rdfs:range ex:LineItem .
+
+### Customer datatype properties
+
+ex:custKey a owl:DatatypeProperty ;
+  rdfs:label "customer key" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:integer .
+
+ex:name a owl:DatatypeProperty ;
+  rdfs:label "name" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:string .
+
+ex:address a owl:DatatypeProperty ;
+  rdfs:label "address" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:string .
+
+ex:nationKey a owl:DatatypeProperty ;
+  rdfs:label "nation key" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:integer .
+
+ex:phone a owl:DatatypeProperty ;
+  rdfs:label "phone" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:string .
+
+ex:accountBalance a owl:DatatypeProperty ;
+  rdfs:label "account balance" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:decimal .
+
+ex:marketSegment a owl:DatatypeProperty ;
+  rdfs:label "market segment" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range xsd:string .
+
+### Order datatype properties
+
+ex:orderKey a owl:DatatypeProperty ;
+  rdfs:label "order key" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:integer .
+
+ex:orderStatus a owl:DatatypeProperty ;
+  rdfs:label "order status" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:string .
+
+ex:totalPrice a owl:DatatypeProperty ;
+  rdfs:label "total price" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:decimal .
+
+ex:orderDate a owl:DatatypeProperty ;
+  rdfs:label "order date" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:date .
+
+ex:orderPriority a owl:DatatypeProperty ;
+  rdfs:label "order priority" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:string .
+
+ex:clerk a owl:DatatypeProperty ;
+  rdfs:label "clerk" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:string .
+
+ex:shipPriority a owl:DatatypeProperty ;
+  rdfs:label "ship priority" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:integer .
+
+### Line item datatype properties
+
+ex:lineNumber a owl:DatatypeProperty ;
+  rdfs:label "line number" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:integer .
+
+ex:partKey a owl:DatatypeProperty ;
+  rdfs:label "part key" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:integer .
+
+ex:supplierKey a owl:DatatypeProperty ;
+  rdfs:label "supplier key" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:integer .
+
+ex:quantity a owl:DatatypeProperty ;
+  rdfs:label "quantity" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:decimal .
+
+ex:extendedPrice a owl:DatatypeProperty ;
+  rdfs:label "extended price" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:decimal .
+
+ex:discount a owl:DatatypeProperty ;
+  rdfs:label "discount" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:decimal .
+
+ex:tax a owl:DatatypeProperty ;
+  rdfs:label "tax" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:decimal .
+
+ex:returnFlag a owl:DatatypeProperty ;
+  rdfs:label "return flag" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:string .
+
+ex:lineStatus a owl:DatatypeProperty ;
+  rdfs:label "line status" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:string .
+
+ex:shipDate a owl:DatatypeProperty ;
+  rdfs:label "ship date" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:date .
+
+ex:commitDate a owl:DatatypeProperty ;
+  rdfs:label "commit date" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:date .
+
+ex:receiptDate a owl:DatatypeProperty ;
+  rdfs:label "receipt date" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:date .
+
+ex:shipInstruct a owl:DatatypeProperty ;
+  rdfs:label "shipping instructions" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:string .
+
+ex:shipMode a owl:DatatypeProperty ;
+  rdfs:label "ship mode" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:string .
+
+### Shared datatype property
+
+ex:comment a owl:DatatypeProperty ;
+  rdfs:label "comment" ;
+  rdfs:domain owl:Thing ;
+  rdfs:range xsd:string .
