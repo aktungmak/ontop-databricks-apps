@@ -4,12 +4,8 @@ bundle:
 variables:
   catalog:
     description: UC catalog for volume
-    default: ontop_vkg
-    value: tagsonomy
   schema:
     description: UC schema for volume
-    default: default
-    value: ontop
   warehouse_cluster_size:
     default: Small
   ontop_version:

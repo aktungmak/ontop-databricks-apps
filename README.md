@@ -23,6 +23,14 @@ After changing files in `mappings/`, redeploy with:
 make deploy-mappings
 ```
 
+## Developing Mappings
+
+The app also includes a visual editor that can help you define an R2RML mapping file, accessible at the `/mapper` endpoint. It speeds up the process by pulling data from Unity Catalog to prepopulate fields and can also import your own ontology to prepopulate fields like class and and property selections.
+
+It can also use an LLM to automatically generate a mapping for a selection of tables in Unity Catalog - just click "Autogenerate", select the tables or schema you want to include and it will take care of gathering the required context and adding the result to your mapping.
+
+Once it is ready, download it to your local machine and use `make run` to upload it and restart the app. 
+
 ## Deployment stages
 
 DAB supports only one `artifact_path` per target, and the UC volume must exist before artifacts can be uploaded. The bundle is therefore split into three targets:
@@ -99,3 +107,7 @@ databricks apps logs ontop-vkg
 ```
 
 Open the app URL and navigate to `/yasgui` to run SPARQL queries.
+
+## License
+
+This project is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
