@@ -1,0 +1,359 @@
+/* R2RML Mapper — layout and page-specific styles */
+
+.app-nav {
+  padding: 0 var(--space-md);
+  background: var(--background);
+}
+
+.mapper-main {
+  max-width: 1400px;
+  margin: 0 auto;
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
+}
+
+.top-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+
+.top-bar h1 {
+  flex: 1;
+  min-width: 200px;
+  font-size: 18px;
+  line-height: 24px;
+}
+
+.top-bar .btn {
+  flex-shrink: 0;
+}
+
+.mode-toggle {
+  margin-bottom: var(--space-md);
+}
+
+#text-editor-panel {
+  display: none;
+}
+
+#text-editor-panel.visible,
+#visual-editor-panel.visible {
+  display: block;
+}
+
+#visual-editor-panel {
+  display: none;
+}
+
+#visual-editor-panel > .btn {
+  margin-bottom: var(--space-md);
+}
+
+#codemirror-container {
+  min-height: 400px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+#codemirror-container:focus-within {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+#codemirror-container .CodeMirror {
+  height: 500px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+.prefix-table-wrap {
+  margin-bottom: var(--space-md);
+}
+
+.prefix-table-wrap .section-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-sm);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.prefix-table-wrap .section-toggle:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.prefix-table-wrap .section-chevron {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--muted-foreground);
+  transition: transform 0.15s ease;
+}
+
+.prefix-table-wrap:not(.collapsed) .section-chevron {
+  transform: rotate(90deg);
+}
+
+.prefix-table-wrap h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.prefix-table-body {
+  overflow-x: auto;
+}
+
+.prefix-table-wrap.collapsed .prefix-table-body {
+  display: none;
+}
+
+.prefix-table-wrap .table {
+  margin-bottom: var(--space-sm);
+}
+
+.prefix-table-wrap .btn {
+  margin-top: var(--space-xs);
+}
+
+.ontology-bar {
+  margin-bottom: var(--space-md);
+  padding: var(--space-md);
+}
+
+.ontology-bar.card h2 {
+  margin-bottom: var(--space-sm);
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.ontology-bar .btn {
+  margin-bottom: var(--space-sm);
+}
+
+.ontology-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm) var(--space-md);
+}
+
+.ontology-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.ontology-item label {
+  margin: 0;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.triples-map-card {
+  margin-bottom: var(--space-md);
+  padding: var(--space-md);
+}
+
+.triples-map-card header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: center;
+  margin-bottom: var(--space-md);
+}
+
+.triples-map-card header h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-sm);
+  flex: 1;
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.triples-map-card h4 {
+  margin: var(--space-md) 0 var(--space-sm);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.stub-card {
+  margin: var(--space-sm) 0;
+  font-style: italic;
+}
+
+.pom-section {
+  margin: var(--space-sm) 0 var(--space-md);
+  padding: var(--space-sm) 0 var(--space-sm) var(--space-md);
+  border-left: 3px solid var(--primary);
+}
+
+.pom-section .btn {
+  margin-top: var(--space-sm);
+}
+
+.field-row {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: var(--space-sm);
+  align-items: start;
+  margin-bottom: var(--space-sm);
+}
+
+.field-row > label {
+  margin: 0;
+  padding-top: 6px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.field-row input,
+.field-row select,
+.field-row textarea {
+  margin: 0;
+}
+
+.template-input-row {
+  display: flex;
+  gap: var(--space-sm);
+  align-items: center;
+}
+
+.template-input-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.column-insert-select {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 7rem;
+}
+
+.warning-text {
+  color: var(--warning);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.uc-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: flex-end;
+}
+
+.uc-picker-row select,
+.uc-picker-row input {
+  min-width: 140px;
+}
+
+.combobox-wrap {
+  position: relative;
+}
+
+.field-row .combobox-wrap {
+  width: 100%;
+  min-width: 0;
+}
+
+.combobox-wrap .input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.combobox-list {
+  position: absolute;
+  z-index: 100;
+  top: 100%;
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--popover);
+  box-shadow: var(--shadow-db-md);
+}
+
+.combobox-list.open {
+  display: block;
+}
+
+.combobox-list button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.combobox-list button:hover {
+  background: var(--row-hover);
+}
+
+.dialog-body .field-label {
+  margin-top: var(--space-sm);
+}
+
+.dialog-body .radio-group {
+  margin-bottom: var(--space-md);
+}
+
+.progress-bar {
+  margin: var(--space-md) 0;
+}
+
+.error-list {
+  max-height: 150px;
+  overflow-y: auto;
+  color: var(--destructive);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.hidden,
+.hidden-input {
+  display: none;
+}
+
+[data-lt-tableName] input[data-field="tableName"],
+[data-lt-sqlQuery] textarea[data-field="sqlQuery"] {
+  margin-top: var(--space-sm);
+}
+
+.uc-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  align-items: flex-end;
+  margin-bottom: var(--space-sm);
+}
+
+.uc-picker .select {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 140px;
+}

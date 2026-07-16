@@ -16,6 +16,7 @@ class Settings:
     ontop_internal_port: int
     app_port: int
     work_dir: Path
+    fm_model_name: str
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -27,4 +28,5 @@ class Settings:
             ontop_internal_port=int(os.environ.get("ONTOP_INTERNAL_PORT", "18080")),
             app_port=int(os.environ.get("DATABRICKS_APP_PORT", "8000")),
             work_dir=Path("/tmp/ontop-vkg"),
+            fm_model_name=os.environ["FM_MODEL_NAME"],
         )

@@ -85,6 +85,11 @@ targets:
           name: ontop-vkg
           description: Ontop VKG SPARQL endpoint over DBSQL
           source_code_path: ./src/app
+          user_api_scopes:
+            - catalog.catalogs:read
+            - catalog.schemas:read
+            - catalog.tables:read
+            - model-serving
           resources:
             - name: sql-warehouse
               sql_warehouse:

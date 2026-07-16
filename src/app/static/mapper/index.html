@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ontop VKG — Mapping Editor</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+  <link rel="stylesheet" href="/static/mapper/dubois-tokens.css" />
+  <link rel="stylesheet" href="/static/mapper/components.css" />
+  <link rel="stylesheet" href="/static/mapper/mapper.css" />
+</head>
+
+<body>
+  <nav class="app-nav tabs">
+    <a href="/yasgui" class="tab" data-nav-link>SPARQL Query</a>
+    <a href="/mapper" class="tab active" data-nav-link>Mapping Editor</a>
+  </nav>
+
+  <main class="mapper-main">
+    <div class="top-bar">
+      <h1>R2RML Mapping Editor</h1>
+      <button type="button" id="btn-load-live" class="btn btn-outline">Load live mapping</button>
+      <label class="btn btn-outline" for="input-upload">Upload file</label>
+      <input type="file" id="input-upload" class="hidden-input" accept=".ttl,.turtle,.r2rml" />
+      <button type="button" id="btn-download" class="btn btn-outline">Download</button>
+      <button type="button" id="btn-clear" class="btn btn-outline">Clear draft</button>
+      <button type="button" id="btn-autogenerate" class="btn btn-primary">Autogenerate</button>
+    </div>
+
+    <section class="ontology-bar card">
+      <h2>Active ontologies for suggestions</h2>
+      <label class="btn btn-outline" for="input-ontology">Upload ontology</label>
+      <input type="file" id="input-ontology" class="hidden-input" accept=".ttl,.turtle,.owl,.rdf" multiple />
+      <div id="ontology-list" class="ontology-list"></div>
+    </section>
+
+    <section class="prefix-table-wrap" id="prefix-section">
+      <button type="button" id="btn-toggle-prefixes" class="section-toggle" aria-expanded="true" aria-controls="prefix-table-body">
+        <span class="section-chevron" aria-hidden="true"></span>
+        <h2>Prefixes</h2>
+      </button>
+      <div id="prefix-table-body" class="prefix-table-body">
+        <table id="prefix-table" class="table">
+          <thead>
+            <tr>
+              <th>Prefix</th>
+              <th>IRI</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="prefix-tbody"></tbody>
+        </table>
+        <button type="button" id="btn-add-prefix" class="btn btn-outline">Add prefix</button>
+      </div>
+    </section>
+
+    <div class="mode-toggle tabs">
+      <button type="button" id="btn-mode-visual" class="tab active">Visual Editor</button>
+      <button type="button" id="btn-mode-text" class="tab">Text Editor</button>
+    </div>
+
+    <section id="visual-editor-panel" class="visible">
+      <button type="button" id="btn-new-map" class="btn btn-primary">New triples map</button>
+      <div id="visual-cards"></div>
+    </section>
+
+    <section id="text-editor-panel">
+      <div id="codemirror-container"><textarea id="turtle-textarea"></textarea></div>
+    </section>
+  </main>
+
+  <dialog id="dialog-autogenerate">
+    <div class="dialog-panel">
+      <div class="dialog-header">
+        <h3>Autogenerate R2RML</h3>
+        <button type="button" class="dialog-close" aria-label="Close" data-close>&times;</button>
+      </div>
+      <div class="dialog-body">
+        <fieldset class="radio-group">
+          <label><input type="radio" name="auto-mode" value="table" checked /> Single table</label>
+          <label><input type="radio" name="auto-mode" value="schema" /> Entire schema</label>
+        </fieldset>
+        <div class="uc-picker-row" id="auto-uc-pickers"></div>
+        <div id="auto-progress" style="display:none">
+          <p id="auto-status-text">Starting…</p>
+          <div class="progress progress-bar">
+            <div class="progress-fill progress-bar-fill" id="auto-progress-fill" style="width:0%"></div>
+          </div>
+          <div id="auto-errors" class="error-list"></div>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button type="button" class="btn btn-outline" data-close>Cancel</button>
+        <button type="button" id="btn-auto-start" class="btn btn-primary">Generate</button>
+        <button type="button" id="btn-auto-retry" style="display:none" class="btn btn-outline">Retry failed</button>
+      </div>
+    </div>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/n3@1.20.0/browser/n3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/turtle/turtle.min.js"></script>
+  <script type="module" src="/static/mapper/mapper.js"></script>
+</body>
+
+</html>

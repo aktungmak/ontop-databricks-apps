@@ -16,6 +16,9 @@ from fastapi.staticfiles import StaticFiles
 
 from config import Settings
 from ontop_manager import OntopProcessManager
+from routes.autogenerate import router as autogenerate_router
+from routes.mapping import router as mapping_router
+from routes.uc import router as uc_router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +38,8 @@ http_client: httpx.AsyncClient | None = None
 async def lifespan(app: FastAPI):
     global http_client
     client = WorkspaceClient()
+    app.state.settings = settings
+    app.state.sp_client = client
     logger.info("Preparing Ontop from volume %s", settings.mappings_volume_path)
     ontop_manager.prepare(client)
     ontop_manager.write_jdbc_properties()
@@ -49,6 +54,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Ontop VKG", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.include_router(mapping_router, prefix="/api/mapping", tags=["mapping"])
+app.include_router(uc_router, prefix="/api/uc", tags=["uc"])
+app.include_router(autogenerate_router, prefix="/api/autogenerate", tags=["autogenerate"])
 
 
 @app.get("/")
@@ -59,6 +67,12 @@ async def root() -> RedirectResponse:
 @app.get("/yasgui")
 async def yasgui() -> Response:
     html = (STATIC_DIR / "yasgui" / "index.html").read_text()
+    return Response(content=html, media_type="text/html")
+
+
+@app.get("/mapper")
+async def mapper() -> Response:
+    html = (STATIC_DIR / "mapper" / "index.html").read_text()
     return Response(content=html, media_type="text/html")
 
 

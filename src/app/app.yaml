@@ -13,3 +13,5 @@ env:
     value: ontology.ttl
   - name: ONTOP_INTERNAL_PORT
     value: "18080"
+  - name: FM_MODEL_NAME
+    value: databricks-claude-opus-4-6

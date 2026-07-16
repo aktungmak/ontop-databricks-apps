@@ -1,0 +1,140 @@
+/* DuBois design tokens — ported from databricks-shadcn-theme skill */
+
+:root {
+  --radius: 0.25rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+
+  --shadow-db-xs: 0px 1px 0px 0px rgba(0, 0, 0, 0.05);
+  --shadow-db-sm: 0px 2px 3px -1px rgba(0, 0, 0, 0.05),
+    0px 1px 0px 0px rgba(0, 0, 0, 0.02);
+  --shadow-db-md: 0px 3px 6px 0px rgba(0, 0, 0, 0.05);
+  --shadow-db-lg: 0px 2px 16px 0px rgba(0, 0, 0, 0.08);
+  --shadow-db-xl: 0px 8px 40px 0px rgba(0, 0, 0, 0.13);
+
+  --blue-700: #0e538b;
+  --blue-800: #04355d;
+  --red-700: #9e1d38;
+
+  --background: #ffffff;
+  --foreground: #11171c;
+  --card: #ffffff;
+  --card-foreground: #11171c;
+  --popover: #ffffff;
+  --popover-foreground: #11171c;
+
+  --primary: #2272b4;
+  --primary-foreground: #ffffff;
+
+  --secondary: #f6f7f9;
+  --secondary-foreground: #11171c;
+
+  --muted: #f6f7f9;
+  --muted-foreground: #5f7281;
+
+  --accent: #f6f7f9;
+  --accent-foreground: #11171c;
+
+  --destructive: #c82d4c;
+
+  --border: #e8ecf0;
+  --input: #e8ecf0;
+  --ring: #2272b4;
+
+  --warning: #be501e;
+  --success: #277c43;
+
+  --border-danger: #fbd0d8;
+  --border-warning: #f8d4a5;
+  --border-success: #a3d9b6;
+  --background-danger: #fff5f7;
+  --background-warning: #fff9eb;
+  --background-success: #f0faf4;
+
+  --row-hover: rgba(68, 83, 95, 0.04);
+  --row-selected: rgba(68, 83, 95, 0.08);
+}
+
+.dark {
+  --background: #11171c;
+  --foreground: #e8ecf0;
+  --card: #1a2530;
+  --card-foreground: #e8ecf0;
+  --popover: #1a2530;
+  --popover-foreground: #e8ecf0;
+
+  --primary: #2e86c1;
+  --primary-foreground: #ffffff;
+
+  --secondary: #1f272d;
+  --secondary-foreground: #e8ecf0;
+
+  --muted: #2a3a45;
+  --muted-foreground: #bdcdd9;
+
+  --accent: #2a3a45;
+  --accent-foreground: #e8ecf0;
+
+  --destructive: #e83a5f;
+
+  --border: #2a3a45;
+  --input: #2a3a45;
+  --ring: #4ba3d6;
+
+  --warning: #dc6222;
+  --success: #3ca45e;
+
+  --border-danger: rgba(232, 58, 95, 0.3);
+  --border-warning: rgba(220, 98, 34, 0.3);
+  --border-success: rgba(60, 164, 94, 0.3);
+  --background-danger: rgba(232, 58, 95, 0.08);
+  --background-warning: rgba(220, 98, 34, 0.08);
+  --background-success: rgba(60, 164, 94, 0.08);
+
+  --row-hover: rgba(189, 205, 219, 0.04);
+  --row-selected: rgba(189, 205, 219, 0.08);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+    'Noto Color Emoji';
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--foreground);
+  background: var(--background);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1 { font-size: 32px; line-height: 40px; font-weight: 600; margin: 0; }
+h2 { font-size: 22px; line-height: 28px; font-weight: 600; margin: 0; }
+h3 { font-size: 18px; line-height: 24px; font-weight: 600; margin: 0; }
+h4 { font-size: 15px; line-height: 20px; font-weight: 600; margin: 0; }
+h5 { font-size: 13px; line-height: 20px; font-weight: 600; margin: 0; }
+h6 { font-size: 12px; line-height: 16px; font-weight: 600; margin: 0; }
+
+b, strong { font-weight: 600; }
+
+a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
