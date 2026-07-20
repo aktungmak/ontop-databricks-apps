@@ -11,6 +11,11 @@ from databricks.sdk import WorkspaceClient
 logger = logging.getLogger(__name__)
 
 
+def bundle_remote_dir(volume: str, prefix: str) -> str:
+    """Path to DAB bundle-uploaded files under {volume}/{prefix}/.internal."""
+    return f"{volume.rstrip('/')}/{prefix.strip('/')}/.internal"
+
+
 def download_volume_file(client: WorkspaceClient, volume_path: str, dest: Path) -> None:
     """Download a single file from a UC volume to a local path."""
     dest.parent.mkdir(parents=True, exist_ok=True)

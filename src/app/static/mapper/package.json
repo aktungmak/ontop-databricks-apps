@@ -2,7 +2,7 @@
   "name": "r2rml-mapper-tests",
   "private": true,
   "type": "module",
-  "description": "Unit tests for the R2RML mapper model.js (run via make ui-test)",
+  "description": "Unit tests for the R2RML mapper model.js",
   "scripts": {
     "test": "node --import ./preload.js --test model.test.js"
   },

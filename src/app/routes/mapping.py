@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
-from volume_files import download_volume_file
+from volume_files import bundle_remote_dir, download_volume_file
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -18,7 +18,8 @@ async def get_live_mapping(request: Request) -> dict[str, str]:
     settings = request.app.state.settings
     client = request.app.state.sp_client
     volume_base = settings.mappings_volume_path.rstrip("/")
-    remote_path = f"{volume_base}/{settings.mapping_file}"
+    mappings_remote = bundle_remote_dir(volume_base, "mappings")
+    remote_path = f"{mappings_remote}/{settings.mapping_file}"
     dest = settings.work_dir / "live-mapping" / settings.mapping_file
 
     try:

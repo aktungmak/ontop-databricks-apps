@@ -17,7 +17,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.core import Config
 
 from config import Settings
-from volume_files import download_volume_file
+from volume_files import bundle_remote_dir, download_volume_file
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ class OntopProcessManager:
         """Download artifacts and mappings from UC volume, extract Ontop bundle."""
         self.work_dir.mkdir(parents=True, exist_ok=True)
         volume = self.settings.mappings_volume_path.rstrip("/")
-        artifacts_remote = self._bundle_remote_dir(client, volume, "artifacts")
-        mappings_remote = self._bundle_remote_dir(client, volume, "mappings")
+        artifacts_remote = bundle_remote_dir(volume, "artifacts")
+        mappings_remote = bundle_remote_dir(volume, "mappings")
 
         artifacts_dir = self.work_dir / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
@@ -146,19 +146,6 @@ class OntopProcessManager:
 
         logger.info("Prepared Ontop launcher at %s", self._ontop_binary)
 
-    def _bundle_remote_dir(self, client: WorkspaceClient, volume: str, prefix: str) -> str:
-        """Resolve bundle-uploaded files (DAB stores them under {prefix}/.internal)."""
-        base = f"{volume.rstrip('/')}/{prefix.strip('/')}"
-        candidates = [f"{base}/.internal", base]
-
-        for candidate in candidates:
-            try:
-                if any(client.files.list_directory_contents(candidate)):
-                    return candidate
-            except Exception:
-                continue
-        return candidates[0]
-
     def _find_ontop_artifact_names(
         self, client: WorkspaceClient, artifacts_remote: str
     ) -> tuple[str | None, str | None]:
@@ -189,7 +176,7 @@ class OntopProcessManager:
         return None
 
     def _find_ontop_artifact_name(self, client: WorkspaceClient, volume: str) -> str:
-        artifacts_remote = self._bundle_remote_dir(client, volume, "artifacts")
+        artifacts_remote = bundle_remote_dir(volume, "artifacts")
         protege_name, cli_name = self._find_ontop_artifact_names(client, artifacts_remote)
         return protege_name or cli_name or ""
 
