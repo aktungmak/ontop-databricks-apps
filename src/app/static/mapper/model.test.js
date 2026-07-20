@@ -180,6 +180,66 @@ describe('mapping.ttl fixture', () => {
   });
 });
 
+describe('parent join serialization', () => {
+  function parentJoinStore(joinCondition) {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard('samples.tpch.customer'), PREFIXES);
+    addTriplesMap(store, newEmptyCard('samples.tpch.orders'), PREFIXES);
+    addPredicateObjectMap(store, '#Orders');
+    updatePredicateObjectMap(
+      store,
+      '#Orders',
+      0,
+      {
+        predicate: 'ex:placedBy',
+        objectMap: {
+          type: 'parentJoin',
+          parentTriplesMap: '#Customer',
+          joinCondition,
+        },
+      },
+      PREFIXES,
+    );
+    return store;
+  }
+
+  it('emits joinCondition triples only when both columns are set', async () => {
+    const withJoin = parentJoinStore({ child: 'o_custkey', parent: 'c_custkey' });
+    const turtle = await serializeStore(withJoin, PREFIXES);
+    assert.match(turtle, /rr:joinCondition/);
+    assert.match(turtle, /rr:child "o_custkey"/);
+    assert.match(turtle, /rr:parent "c_custkey"/);
+
+    const withoutJoin = parentJoinStore({ child: '', parent: '' });
+    const emptyTurtle = await serializeStore(withoutJoin, PREFIXES);
+    assert.doesNotMatch(emptyTurtle, /rr:joinCondition/);
+    assert.doesNotMatch(emptyTurtle, /rr:child "/);
+    assert.doesNotMatch(emptyTurtle, /rr:parent "/);
+    assert.match(emptyTurtle, /rr:parentTriplesMap/);
+  });
+
+  it('omits joinCondition when only one column is set', async () => {
+    const partialChild = parentJoinStore({ child: 'o_custkey', parent: '' });
+    const partialParent = parentJoinStore({ child: '', parent: 'c_custkey' });
+    for (const store of [partialChild, partialParent]) {
+      const turtle = await serializeStore(store, PREFIXES);
+      assert.doesNotMatch(turtle, /rr:joinCondition/);
+      assert.doesNotMatch(turtle, /rr:child "/);
+      assert.doesNotMatch(turtle, /rr:parent "/);
+    }
+  });
+
+  it('round-trips parent join with both columns', () => {
+    const store = parentJoinStore({ child: 'o_custkey', parent: 'c_custkey' });
+    const maps = parseTriplesMaps(store);
+    const order = maps.find((m) => m.id === '#Orders');
+    assert.deepEqual(order.predicateObjectMaps[0].objectMap.joinCondition, {
+      child: 'o_custkey',
+      parent: 'c_custkey',
+    });
+  });
+});
+
 describe('newEmptyCard', () => {
   it('builds a card from a table name', () => {
     const card = newEmptyCard('samples.tpch.orders');

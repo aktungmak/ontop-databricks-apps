@@ -725,14 +725,14 @@ function writeObjectMap(store, omNode, objectMap, prefixes, mapId, idx) {
     const parentId = objectMap.parentTriplesMap;
     const parentIri = parentId.startsWith('#') ? namedNode(parentId) : namedNode(`#${parentId}`);
     store.addQuad(quad(omNode, namedNode(`${RR}parentTriplesMap`), parentIri));
-    const jc = blankNode(`jc_${sanitized}_${idx}`);
-    store.addQuad(quad(omNode, namedNode(`${RR}joinCondition`), jc));
-    store.addQuad(
-      quad(jc, namedNode(`${RR}child`), literalTerm(objectMap.joinCondition.child)),
-    );
-    store.addQuad(
-      quad(jc, namedNode(`${RR}parent`), literalTerm(objectMap.joinCondition.parent)),
-    );
+    const child = (objectMap.joinCondition?.child ?? '').trim();
+    const parent = (objectMap.joinCondition?.parent ?? '').trim();
+    if (child && parent) {
+      const jc = blankNode(`jc_${sanitized}_${idx}`);
+      store.addQuad(quad(omNode, namedNode(`${RR}joinCondition`), jc));
+      store.addQuad(quad(jc, namedNode(`${RR}child`), literalTerm(child)));
+      store.addQuad(quad(jc, namedNode(`${RR}parent`), literalTerm(parent)));
+    }
   }
 }
 

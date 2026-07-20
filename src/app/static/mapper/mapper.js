@@ -521,6 +521,15 @@ function setupDatatypeCombobox(input) {
   attachAutocomplete(input, () => XSD_DATATYPES);
 }
 
+function setupParentMapAutocomplete(input, getFragmentIds) {
+  if (!input) return;
+  attachAutocomplete(input, getFragmentIds);
+}
+
+function tableNameFromCard(card) {
+  return card?.logicalTable?.type === 'tableName' ? card.logicalTable.value : '';
+}
+
 function renderVisualEditor() {
   const cards = parseTriplesMaps(state.store);
   visualCards.innerHTML = '';
@@ -674,7 +683,7 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
   }
 
   const omType = pom.objectMap?.type || 'column';
-  const fragmentIds = cards.map((c) => c.id);
+  const parentMapIds = cards.map((c) => c.id);
   const datatypeDisplay = pom.objectMap?.datatype
     ? compactIri(pom.objectMap.datatype, state.prefixes)
     : '';
@@ -720,16 +729,11 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
       <div class="field-row"><label>Constant</label><input type="text" class="input" value="${esc(pom.objectMap.constant || '')}" data-om-constant /></div>
     </div>
     <div data-om-parentJoin class="${omType === 'parentJoin' ? '' : 'hidden'}">
-      <div class="field-row"><label>Parent map</label>
-        <select class="select" data-om-parent-select>
-          <option value="">— select —</option>
-          ${fragmentIds.map((id) => `<option value="${esc(id)}" ${pom.objectMap.parentTriplesMap === id ? 'selected' : ''}>${esc(id)}</option>`).join('')}
-        </select>
-        <input type="text" class="input" placeholder="or manual IRI" value="${esc(pom.objectMap.parentTriplesMap || '')}" data-om-parent-manual />
-      </div>
+      <div class="field-row"><label>Parent map</label><input type="text" class="input" value="${esc(pom.objectMap.parentTriplesMap || '')}" data-om-parent-map placeholder="#OtherMap" /></div>
       <div data-parent-warning></div>
-      <div class="field-row"><label>Join child</label><input type="text" class="input" value="${esc(pom.objectMap.joinCondition?.child || '')}" data-om-jc-child /></div>
-      <div class="field-row"><label>Join parent</label><input type="text" class="input" value="${esc(pom.objectMap.joinCondition?.parent || '')}" data-om-jc-parent /></div>
+      <div data-join-warning></div>
+      <div class="field-row"><label>Child column</label><input type="text" class="input" value="${esc(pom.objectMap.joinCondition?.child || '')}" data-om-jc-child /></div>
+      <div class="field-row"><label>Parent column</label><input type="text" class="input" value="${esc(pom.objectMap.joinCondition?.parent || '')}" data-om-jc-parent /></div>
     </div>
     <button type="button" class="btn btn-outline" data-remove-pom>Remove POM</button>
   `;
@@ -748,7 +752,7 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
     } else if (omType === 'constant') {
       objectMap.constant = div.querySelector('input[data-om-constant]')?.value ?? '';
     } else if (omType === 'parentJoin') {
-      objectMap.parentTriplesMap = div.querySelector('[data-om-parent-manual]')?.value ?? '';
+      objectMap.parentTriplesMap = div.querySelector('[data-om-parent-map]')?.value ?? '';
       objectMap.joinCondition = {
         child: div.querySelector('[data-om-jc-child]')?.value ?? '',
         parent: div.querySelector('[data-om-jc-parent]')?.value ?? '',
@@ -824,7 +828,6 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
 
   if (isTableName) {
     setupColumnAutocomplete(omColumnInput, () => card.logicalTable.value);
-    setupColumnAutocomplete(div.querySelector('[data-om-jc-child]'), () => card.logicalTable.value);
     setupColumnInsertSelect(
       div.querySelector('[data-om-template-columns]'),
       () => card.logicalTable.value,
@@ -840,30 +843,43 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
     );
   }
 
-  setupColumnAutocomplete(div.querySelector('[data-om-jc-parent]'), () => {
-    const parentCard = cards.find((c) => c.id === pom.objectMap.parentTriplesMap);
-    return parentCard?.logicalTable?.type === 'tableName' ? parentCard.logicalTable.value : '';
-  });
+  const parentMapInput = div.querySelector('[data-om-parent-map]');
+  const childColumnInput = div.querySelector('[data-om-jc-child]');
+  const parentColumnInput = div.querySelector('[data-om-jc-parent]');
+
+  setupParentMapAutocomplete(parentMapInput, () => parentMapIds);
+
+  const resolveParentTableName = () => {
+    const parentId = parentMapInput?.value || pom.objectMap.parentTriplesMap || '';
+    const parentCard = cards.find((c) => c.id === parentId);
+    return tableNameFromCard(parentCard);
+  };
+
+  if (omType === 'parentJoin') {
+    if (isTableName) {
+      setupColumnAutocomplete(childColumnInput, () => card.logicalTable.value);
+    }
+    setupColumnAutocomplete(parentColumnInput, resolveParentTableName);
+  }
 
   const warnEl = div.querySelector('[data-parent-warning]');
+  const joinWarnEl = div.querySelector('[data-join-warning]');
   const updateParentWarning = () => {
-    const pid = div.querySelector('[data-om-parent-manual]')?.value || pom.objectMap.parentTriplesMap;
+    const pid = parentMapInput?.value || pom.objectMap.parentTriplesMap;
     warnEl.innerHTML = pid && !cards.some((c) => c.id === pid)
       ? '<span class="warning-text">Warning: parent triples map not found in editor</span>'
       : '';
   };
+  const updateJoinWarning = () => {
+    const child = (div.querySelector('[data-om-jc-child]')?.value ?? '').trim();
+    const parent = (div.querySelector('[data-om-jc-parent]')?.value ?? '').trim();
+    const partial = (child && !parent) || (!child && parent);
+    joinWarnEl.innerHTML = partial
+      ? '<span class="warning-text">Provide both child and parent columns, or leave both blank</span>'
+      : '';
+  };
 
-  div.querySelector('[data-om-parent-select]')?.addEventListener('change', (e) => {
-    div.querySelector('[data-om-parent-manual]').value = e.target.value;
-    const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: current.predicate,
-      objectMap: { ...current.objectMap, parentTriplesMap: e.target.value },
-    }, state.prefixes);
-    updateParentWarning();
-    markDirty();
-  });
-  div.querySelector('[data-om-parent-manual]')?.addEventListener('change', (e) => {
+  parentMapInput?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
     updatePredicateObjectMap(state.store, card.id, pomIdx, {
       predicate: current.predicate,
@@ -881,6 +897,7 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
         joinCondition: { ...current.objectMap.joinCondition, child: e.target.value },
       },
     }, state.prefixes);
+    updateJoinWarning();
     markDirty();
   });
   div.querySelector('[data-om-jc-parent]')?.addEventListener('change', (e) => {
@@ -892,9 +909,11 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
         joinCondition: { ...current.objectMap.joinCondition, parent: e.target.value },
       },
     }, state.prefixes);
+    updateJoinWarning();
     markDirty();
   });
   updateParentWarning();
+  updateJoinWarning();
 
   div.querySelector('[data-remove-pom]').addEventListener('click', () => {
     removePredicateObjectMap(state.store, card.id, pomIdx);
