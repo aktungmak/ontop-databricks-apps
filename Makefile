@@ -1,6 +1,6 @@
 PROFILE ?= DEFAULT
 
-.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run
+.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run ui-test
 
 validate:
 	databricks bundle validate --strict -t volume --profile $(PROFILE)
@@ -20,3 +20,6 @@ deploy: deploy-volume deploy-mappings deploy-app
 
 run: deploy
 	databricks bundle run ontop_vkg -t app --profile $(PROFILE)
+
+ui-test:
+	cd src/app/static/mapper && npm install --no-fund --no-audit && npm test
