@@ -392,11 +392,46 @@ export function compactIri(iri, prefixes) {
 // ── R2RML card model ─────────────────────────────────────────────────────────
 
 const UNSUPPORTED_PROPS = new Set([
-  `${RR}datatype`,
   `${RR}language`,
   `${RR}graphMap`,
   `${RR}graph`,
 ]);
+
+export const XSD_DATATYPES = [
+  'xsd:string',
+  'xsd:boolean',
+  'xsd:decimal',
+  'xsd:float',
+  'xsd:double',
+  'xsd:integer',
+  'xsd:long',
+  'xsd:int',
+  'xsd:short',
+  'xsd:byte',
+  'xsd:nonPositiveInteger',
+  'xsd:negativeInteger',
+  'xsd:nonNegativeInteger',
+  'xsd:unsignedLong',
+  'xsd:unsignedInt',
+  'xsd:unsignedShort',
+  'xsd:unsignedByte',
+  'xsd:positiveInteger',
+  'xsd:dateTime',
+  'xsd:date',
+  'xsd:time',
+  'xsd:gYearMonth',
+  'xsd:gYear',
+  'xsd:gMonthDay',
+  'xsd:gDay',
+  'xsd:gMonth',
+  'xsd:duration',
+  'xsd:anyURI',
+  'xsd:language',
+  'xsd:base64Binary',
+  'xsd:hexBinary',
+  'xsd:normalizedString',
+  'xsd:token',
+];
 
 function getObjects(store, subject, predicate) {
   return store.getQuads(subject, predicate, null, null).map((q) => q.object);
@@ -406,6 +441,12 @@ function getLiteral(store, subject, predicate) {
   const objs = getObjects(store, subject, predicate);
   const lit = objs.find((o) => o.termType === 'Literal');
   return lit ? lit.value : objs[0] ? termStr(objs[0]) : '';
+}
+
+function getNamedNodeIri(store, subject, predicate) {
+  const objs = getObjects(store, subject, predicate);
+  const nn = objs.find((o) => o.termType === 'NamedNode');
+  return nn ? nn.value : '';
 }
 
 function hasUnsupportedProps(store, subject) {
@@ -445,8 +486,10 @@ function parseJoinCondition(store, jcNode) {
 
 function parseObjectMap(store, omNode) {
   if (hasUnsupportedProps(store, omNode)) {
-    return { type: 'stub', reason: 'unsupported construct (datatype/language/graph)' };
+    return { type: 'stub', reason: 'unsupported construct (language/graph)' };
   }
+
+  const datatype = getNamedNodeIri(store, omNode, namedNode(`${RR}datatype`));
 
   const parentRefs = getObjects(store, omNode, namedNode(`${RR}parentTriplesMap`));
   const joinConds = getObjects(store, omNode, namedNode(`${RR}joinCondition`));
@@ -463,12 +506,12 @@ function parseObjectMap(store, omNode) {
 
   const columnPred = namedNode(`${RR}column`);
   if (getObjects(store, omNode, columnPred).length > 0) {
-    return { type: 'column', column: getLiteral(store, omNode, columnPred) };
+    return { type: 'column', column: getLiteral(store, omNode, columnPred), datatype };
   }
 
   const templatePred = namedNode(`${RR}template`);
   if (getObjects(store, omNode, templatePred).length > 0) {
-    return { type: 'template', template: getLiteral(store, omNode, templatePred) };
+    return { type: 'template', template: getLiteral(store, omNode, templatePred), datatype };
   }
 
   const constant = getObjects(store, omNode, namedNode(`${RR}constant`));
@@ -652,14 +695,27 @@ function removeTriplesMapSubgraph(store, mapId) {
   }
 }
 
+function writeObjectMapDatatype(store, omNode, objectMap, prefixes) {
+  const datatypePred = namedNode(`${RR}datatype`);
+  for (const q of store.getQuads(omNode, datatypePred, null, null)) {
+    store.removeQuad(q);
+  }
+  if (objectMap.datatype) {
+    const dt = iriTerm(objectMap.datatype, prefixes);
+    if (dt) store.addQuad(quad(omNode, datatypePred, dt));
+  }
+}
+
 function writeObjectMap(store, omNode, objectMap, prefixes, mapId, idx) {
   const sanitized = sanitizeMapId(mapId);
   const omType = objectMap.type;
 
   if (omType === 'column') {
     setObjectMapLiteral(store, omNode, namedNode(`${RR}column`), objectMap.column);
+    writeObjectMapDatatype(store, omNode, objectMap, prefixes);
   } else if (omType === 'template') {
     setObjectMapLiteral(store, omNode, namedNode(`${RR}template`), objectMap.template);
+    writeObjectMapDatatype(store, omNode, objectMap, prefixes);
   } else if (omType === 'constant') {
     const val = objectMap.isIri
       ? iriTerm(objectMap.constant, prefixes)

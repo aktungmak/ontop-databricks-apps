@@ -29,6 +29,7 @@ import {
   setOntologyActive,
   buildOntologyIndex,
   compactIri,
+  XSD_DATATYPES,
 } from './model.js';
 
 const state = {
@@ -515,6 +516,11 @@ function setupOntologyAutocomplete(input, getOptions) {
   attachAutocomplete(input, getOptions);
 }
 
+function setupDatatypeCombobox(input) {
+  if (!input) return;
+  attachAutocomplete(input, () => XSD_DATATYPES);
+}
+
 function renderVisualEditor() {
   const cards = parseTriplesMaps(state.store);
   visualCards.innerHTML = '';
@@ -669,6 +675,10 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
 
   const omType = pom.objectMap?.type || 'column';
   const fragmentIds = cards.map((c) => c.id);
+  const datatypeDisplay = pom.objectMap?.datatype
+    ? compactIri(pom.objectMap.datatype, state.prefixes)
+    : '';
+  const showDatatype = omType === 'column' || omType === 'template';
 
   div.innerHTML = `
     <div class="field-row"><label>Predicate</label><input type="text" class="input" value="${esc(pom.predicate)}" data-pom-predicate /></div>
@@ -679,6 +689,18 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
         <option value="constant" ${omType === 'constant' ? 'selected' : ''}>constant</option>
         <option value="parentJoin" ${omType === 'parentJoin' ? 'selected' : ''}>parent join</option>
       </select>
+    </div>
+    <div data-om-datatype-row class="${showDatatype ? '' : 'hidden'}">
+      <div class="field-row">
+        <label>Datatype</label>
+        <input
+          type="text"
+          class="input"
+          value="${esc(datatypeDisplay)}"
+          data-om-datatype
+          placeholder="optional — e.g. xsd:integer"
+        />
+      </div>
     </div>
     <div data-om-column class="${omType === 'column' ? '' : 'hidden'}">
       <div class="field-row"><label>Column</label><input type="text" class="input" value="${esc(pom.objectMap.column || '')}" data-om-column /></div>
@@ -719,8 +741,10 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
     const objectMap = { type: omType };
     if (omType === 'column') {
       objectMap.column = div.querySelector('input[data-om-column]')?.value ?? '';
+      objectMap.datatype = div.querySelector('[data-om-datatype]')?.value.trim() ?? '';
     } else if (omType === 'template') {
       objectMap.template = div.querySelector('input[data-om-template]')?.value ?? '';
+      objectMap.datatype = div.querySelector('[data-om-datatype]')?.value.trim() ?? '';
     } else if (omType === 'constant') {
       objectMap.constant = div.querySelector('input[data-om-constant]')?.value ?? '';
     } else if (omType === 'parentJoin') {
@@ -752,6 +776,14 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
     renderVisualEditor();
     markDirty();
   };
+
+  const datatypeInput = div.querySelector('[data-om-datatype]');
+  setupDatatypeCombobox(datatypeInput);
+  datatypeInput?.addEventListener('change', () => {
+    const current = currentPomFromDom();
+    updatePredicateObjectMap(state.store, card.id, pomIdx, current, state.prefixes);
+    markDirty();
+  });
 
   div.querySelector('[data-pom-om-type]').addEventListener('change', (e) => showOm(e.target.value));
   pomPredicateInput?.addEventListener('change', (e) => {
