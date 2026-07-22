@@ -18,6 +18,10 @@ class Settings:
     work_dir: Path
     fm_model_name: str
 
+    @property
+    def warehouse_http_path(self) -> str:
+        return f"/sql/1.0/warehouses/{self.warehouse_id}"
+
     @classmethod
     def from_env(cls) -> Settings:
         return cls(

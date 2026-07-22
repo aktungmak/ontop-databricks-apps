@@ -86,6 +86,7 @@ targets:
             - catalog.schemas:read
             - catalog.tables:read
             - model-serving
+            - sql
           resources:
             - name: sql-warehouse
               sql_warehouse:

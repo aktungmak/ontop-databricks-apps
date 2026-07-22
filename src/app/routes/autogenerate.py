@@ -212,7 +212,7 @@ def _fm_client(token: str) -> OpenAI:
     host = get_workspace_host()
     return OpenAI(
         api_key=token,
-        base_url=f"{host}/serving-endpoints",
+        base_url=f"https://{host}/serving-endpoints",
     )
 
 

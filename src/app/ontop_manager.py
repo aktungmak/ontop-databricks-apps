@@ -265,16 +265,16 @@ class OntopProcessManager:
             )
 
         host = self._workspace_host()
-        warehouse_id = self.settings.warehouse_id
         jdbc_url = (
             f"jdbc:databricks://{host}:443;"
-            f"HttpPath=/sql/1.0/warehouses/{warehouse_id};"
+            f"HttpPath={self.settings.warehouse_http_path};"
             f"AuthMech=11;Auth_Flow=1;"
             f"OAuth2ClientId={client_id};OAuth2Secret={client_secret}"
         )
         content = (
             f"jdbc.url={jdbc_url}\n"
             f"jdbc.driver=com.databricks.client.jdbc.Driver\n"
+            "ontop.reformulateToFullNativeQuery=true\n"
         )
         self.properties_path.write_text(content)
         logger.info("Wrote JDBC M2M OAuth properties for service principal %s", client_id)
@@ -297,6 +297,7 @@ class OntopProcessManager:
             str(self.settings.ontop_internal_port),
             "--disable-portal-page",
             "--lazy",
+            "--dev",  # exposes /ontop/reformulate
         ]
         if self._ontology_path and self._ontology_path.exists():
             cmd.extend(["--ontology", str(self._ontology_path)])

@@ -2,6 +2,8 @@
 
 This repo uses the [Ontop Virtual Knowledge Graph (VKG)](https://ontop-vkg.org/) to provide a SPARQL endpoint over Databricks SQL, deployed as a Databricks App via a Declarative Automation Bundle (DAB).
 
+For supported SPARQL features, common reformulation failures, and query rewrite patterns, see [SPARQL_FEATURES.md](SPARQL_FEATURES.md).
+
 ## Prerequisites
 
 - Databricks CLI with OAuth profile configured

@@ -15,11 +15,25 @@ def get_workspace_host() -> str:
     """Return workspace URL with https:// scheme."""
     host = os.environ.get("DATABRICKS_HOST", "")
     if not host:
-        # Local dev only; SP credentials from env are fine for host discovery.
-        host = WorkspaceClient().config.host or ""
-    if host and not host.startswith("http"):
-        host = f"https://{host}"
+        raise RuntimeError("DATABRICKS_HOST is not set")
     return host
+
+
+def get_user_token(request: Request) -> str:
+    """Return the forwarded user OAuth access token or raise 401."""
+    raw = request.headers.get("x-forwarded-access-token")
+    if not raw:
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Missing user authorization. Open this app in Databricks and "
+                "approve the requested permissions (user_api_scopes)."
+            ),
+        )
+    token = raw.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+    return token
 
 
 def get_obo_client_from_token(token: str) -> WorkspaceClient:
@@ -42,15 +56,7 @@ def get_obo_client_from_token(token: str) -> WorkspaceClient:
 
 
 def get_obo_client(request: Request) -> WorkspaceClient:
-    token = request.headers.get("x-forwarded-access-token")
-    if not token:
-        raise HTTPException(
-            status_code=401,
-            detail=(
-                "Missing user authorization. Open this app in Databricks and "
-                "approve the requested permissions (user_api_scopes)."
-            ),
-        )
+    token = get_user_token(request)
     try:
         return get_obo_client_from_token(token)
     except ValueError as exc:
