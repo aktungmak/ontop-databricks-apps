@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 _ARROW_JAVA_OPENS = (
     "--add-opens=java.base/java.nio=org.apache.arrow.memory.core,ALL-UNNAMED"
 )
+# Spring Boot 2.3+ hides exception messages in /error responses by default.
+# Ontop's /ontop/reformulate relies on that path for reformulation failures.
+_SPRING_ERROR_MESSAGE = "-Dserver.error.include-message=always"
 
 
 class OntopProcessManager:
@@ -240,10 +243,11 @@ class OntopProcessManager:
 
         # Ontop CLI honors ONTOP_JAVA_ARGS when launching the JVM (see ontop docker README).
         existing_java_args = env.get("ONTOP_JAVA_ARGS", "").strip()
+        extra_java_args = f"{_ARROW_JAVA_OPENS} {_SPRING_ERROR_MESSAGE}"
         env["ONTOP_JAVA_ARGS"] = (
-            f"{existing_java_args} {_ARROW_JAVA_OPENS}".strip()
+            f"{existing_java_args} {extra_java_args}".strip()
             if existing_java_args
-            else _ARROW_JAVA_OPENS
+            else extra_java_args
         )
         return env
 
@@ -274,6 +278,7 @@ class OntopProcessManager:
         content = (
             f"jdbc.url={jdbc_url}\n"
             f"jdbc.driver=com.databricks.client.jdbc.Driver\n"
+            "ontop.enableFactExtractionWithTBox=true\n"
             "ontop.reformulateToFullNativeQuery=true\n"
         )
         self.properties_path.write_text(content)

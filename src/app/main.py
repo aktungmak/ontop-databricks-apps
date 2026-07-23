@@ -63,6 +63,29 @@ def extract_native_sql(reformulate_output: str) -> str:
     return text
 
 
+def format_ontop_error(body: str, status_code: int) -> str:
+    """Prefer the Spring Boot/Ontop exception message over a generic error envelope."""
+    text = (body or "").strip()
+    if not text:
+        return f"Ontop reformulate failed with HTTP {status_code}"
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if not isinstance(payload, dict):
+        return text
+    message = payload.get("message")
+    if isinstance(message, str) and message.strip():
+        return message.strip()
+    error = payload.get("error")
+    path = payload.get("path")
+    parts = [str(error)] if error else []
+    parts.append(f"(HTTP {status_code})")
+    if path:
+        parts.append(f"at {path}")
+    return " ".join(parts)
+
+
 def extract_variable_types(reformulate_output: str) -> dict[str, str]:
     """Parse projected-variable RDF types from Ontop 5.5 IQ-tree CONSTRUCT metadata.
 
@@ -239,15 +262,16 @@ async def sparql(request: Request) -> Response:
         )
 
     if upstream.status_code >= 400:
+        detail = format_ontop_error(upstream.text, upstream.status_code)
         logger.error(
             "Ontop returned %s for %s %s: %s",
             upstream.status_code,
             request.method,
             target,
-            upstream.text[:500] if upstream.text else "",
+            detail[:1000],
         )
         return Response(
-            content=upstream.text,
+            content=detail,
             status_code=upstream.status_code,
             media_type="text/plain",
         )
