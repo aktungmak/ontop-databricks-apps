@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from main import extract_native_sql, extract_variable_types, to_sparql_json
+from sparql_execute import extract_native_sql, extract_variable_types, to_sparql_json
 
 CONSTRUCT_REFORMULATE = """\
 ans1(c, name)

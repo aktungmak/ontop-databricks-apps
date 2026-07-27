@@ -1,23 +1,28 @@
 # Ontop VKG on Databricks Apps
 
 This repo uses the [Ontop Virtual Knowledge Graph (VKG)](https://ontop-vkg.org/) to provide a SPARQL endpoint over Databricks SQL, deployed as a Databricks App via a Declarative Automation Bundle (DAB).
+All translated queries are executed using the user's identity, ensuring that the Unity Catalog permissions of the underlying table are enforced.
+
+The app also provides an MCP endpoint for agents to iteratively validate SPARQL queries they generate against the ontology using the [Ontology-based Query Check (OBQC)](https://arxiv.org/abs/2405.11706) approach defined by Allemang and Sequeda.
 
 For supported SPARQL features, common reformulation failures, and query rewrite patterns, see [SPARQL_FEATURES.md](SPARQL_FEATURES.md).
 
-## Prerequisites
+## Installation
 
-- Databricks CLI with OAuth profile configured
-- `curl`, `make`
+Ensure that you have the latest Databricks CLI installed, then run:
 
 ```bash
 databricks auth login --profile DEFAULT
+make run
 ```
 
 You will also need to edit `databricks.yml` to set the `catalog` and `schema` variables where the mapping files and other artefacts will be stored (see [Configuration](#configuration) below). The catalog and schema must already exist — the bundle will not create them.
 
-## Mappings
+## Mappings and ontology
 
 The `mappings/` directory holds the VKG definition that gets uploaded to the UC Volume. It currently contains example TPC-H `mapping.ttl` and `ontology.ttl` files so the project works out of the box — edit or replace these with your own mapping and ontology when setting up your VKG.
+
+**Ontology requirement:** MCP discovery tools (`search_ontology`, `describe_iri`) and `check_sparql` need `ontology.ttl` (or the configured ontology file) present on the volume. Without it, those tools report that the ontology is not loaded however `execute_sparql` can still run against the VKG if mappings are valid.
 
 After changing files in `mappings/`, redeploy with:
 
@@ -27,11 +32,11 @@ make deploy-mappings
 
 ## Developing Mappings
 
-The app also includes a visual editor that can help you define an R2RML mapping file, accessible at the `/mapper` endpoint. It speeds up the process by pulling data from Unity Catalog to prepopulate fields and can also import your own ontology to prepopulate fields like class and and property selections.
+The app also includes a visual editor that can help you define an R2RML mapping file, accessible at the `/mapper` endpoint. It speeds up the process by pulling data from Unity Catalog to prepopulate fields and can also import your own ontology to prepopulate fields like class and property selections.
 
-It can also use an LLM to automatically generate a mapping for a selection of tables in Unity Catalog - just click "Autogenerate", select the tables or schema you want to include and it will take care of gathering the required context and adding the result to your mapping.
+It can also use an LLM to automatically generate a mapping for a selection of tables in Unity Catalog — click "Autogenerate", select the tables or schema you want to include, and it will gather context and add the result to your mapping.
 
-Once it is ready, download it to your local machine and use `make run` to upload it and restart the app. 
+Once it is ready, download it to your local machine and use `make run` to upload it and restart the app.
 
 ## Deployment stages
 
@@ -43,50 +48,38 @@ DAB supports only one `artifact_path` per target, and the UC volume must exist b
 | `mappings` | Upload `mapping.ttl` and optional `ontology.ttl` to the volume |
 | `app` | Deploy warehouse, app, and Ontop/JDBC artifacts |
 
-### Full deploy and run
-
-```bash
-make run
-```
-
-This runs all three stages in order, then starts the app.
-
-### Individual stages
-
-```bash
-# First-time setup (volume must exist before mappings or app)
-make deploy-volume
-
-# Upload or update mapping and ontology
-make deploy-mappings
-
-# Deploy warehouse, app, and Ontop runtime artifacts
-make deploy-app
-```
-
-## Volume layout
-
-```
-/Volumes/{catalog}/{schema}/ontop_vkg/
-├── artifacts/
-│   └── .internal/         # ontop_runtime artifact (app target)
-│       ├── ontop-cli-5.5.0.zip
-│       ├── OpenJDK17U-jre_x64_linux_hotspot_*.tar.gz
-│       └── DatabricksJDBC42.jar
-└── mappings/
-    └── .internal/         # mappings artifact (mappings target)
-        ├── mapping.ttl
-        └── ontology.ttl   # Optional ontology (see Ontop docs)
-```
+The `make run` target runs all of these in order and then starts the app (`mcp-ontop-vkg`).
 
 ## Endpoints
 
 | Path | Description |
 |------|-------------|
-| `/` | Redirect to YASGUI |
 | `/yasgui` | SPARQL query UI |
 | `/sparql` | SPARQL 1.1 endpoint |
-| `/health` | Health check |
+| `/mcp` | TBox Toolbox MCP |
+| `/health` | Health check (Ontop + ontology loaded) |
+| `/mapper` | Visual R2RML mapping editor |
+
+## MCP tools
+
+Public MCP URL: `https://<app-url>/mcp`
+
+| Tool | Purpose |
+|------|---------|
+| `health` | Ontop running + ontology loaded |
+| `search_ontology` | Fuzzy label/comment search returning results in Turtle format |
+| `describe_iri` | Neighborhood of the given IRI returned in Turtle format |
+| `check_sparql` | Ontology-Based Query Check (OBQC) |
+| `execute_sparql` | Run SPARQL against the VKG → SPARQL JSON or error text |
+
+### Agent usage pattern
+
+1. `search_ontology` / `describe_iri` to discover relevant resources
+2. Draft SPARQL
+3. `check_sparql` and rewrite based on violation messages (if any)
+4. `execute_sparql` and iterate based on the results
+
+TBox tools use the in-memory ontology only. `execute_sparql` uses Ontop + Databricks SQL with the caller's Apps-forwarded access token.
 
 ## Configuration
 
@@ -104,11 +97,11 @@ Environment variables are set in `src/app/app.yaml`. Bundle variables in `databr
 ## Verify
 
 ```bash
-databricks apps get ontop-vkg 
-databricks apps logs ontop-vkg
+databricks apps get mcp-ontop-vkg
+databricks apps logs mcp-ontop-vkg
 ```
 
-Open the app URL and navigate to `/yasgui` to run SPARQL queries.
+Open the app URL and navigate to `/yasgui` for a SPARQL editor, or point an MCP client at `/mcp`.
 
 ## License
 

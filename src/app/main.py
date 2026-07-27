@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import re
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
 
 import httpx
 import uvicorn
 from databricks.sdk import WorkspaceClient
-from databricks.sql.exc import RequestError
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastmcp.utilities.lifespan import combine_lifespans
 
 from config import Settings
-from obo import get_user_token, get_workspace_host
+from mcp_server import McpRuntime, configure as configure_mcp, mcp
+from obo import get_user_token
+from ontology_store import OntologyStore
 from ontop_manager import OntopProcessManager
 from routes.autogenerate import router as autogenerate_router
 from routes.mapping import router as mapping_router
 from routes.uc import router as uc_router
+from sparql_execute import (
+    SparqlExecuteError,
+    SparqlExecuteSuccess,
+    execute_sparql_query,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,151 +39,59 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-_NATIVE_LINE = re.compile(
-    r"^\s*NATIVE\s*\[[^\]]*\]\s*$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_CONSTRUCT_TYPES = re.compile(
-    r"CONSTRUCT\s*\[[^\]]*\]\s*\[([^\]]+)\]",
-    re.IGNORECASE,
-)
-_VAR_RDF_TYPE = re.compile(
-    r"(\w+)/RDF\((?:[^(),]|\([^()]*\))+,(IRI|xsd:[\w]+|https?://[^)]+)\)",
-    re.IGNORECASE,
-)
-_XSD_NS = "http://www.w3.org/2001/XMLSchema#"
-
 settings = Settings.from_env()
 ontop_manager = OntopProcessManager(settings)
-http_client: httpx.AsyncClient | None = None
 
-
-def extract_native_sql(reformulate_output: str) -> str:
-    """Return executable SQL from Ontop reformulate output (5.5 IQ tree or plain SQL)."""
-    text = reformulate_output.strip()
-    match = _NATIVE_LINE.search(text)
-    if match:
-        return text[match.end() :].lstrip("\n").strip() or text
-    return text
-
-
-def format_ontop_error(body: str, status_code: int) -> str:
-    """Prefer the Spring Boot/Ontop exception message over a generic error envelope."""
-    text = (body or "").strip()
-    if not text:
-        return f"Ontop reformulate failed with HTTP {status_code}"
-    try:
-        payload = json.loads(text)
-    except json.JSONDecodeError:
-        return text
-    if not isinstance(payload, dict):
-        return text
-    message = payload.get("message")
-    if isinstance(message, str) and message.strip():
-        return message.strip()
-    error = payload.get("error")
-    path = payload.get("path")
-    parts = [str(error)] if error else []
-    parts.append(f"(HTTP {status_code})")
-    if path:
-        parts.append(f"at {path}")
-    return " ".join(parts)
-
-
-def extract_variable_types(reformulate_output: str) -> dict[str, str]:
-    """Parse projected-variable RDF types from Ontop 5.5 IQ-tree CONSTRUCT metadata.
-
-    Ontop 5.6 (PR #933) will expose a better native-consumption API; this parser
-    targets the 5.5 reformulate output shape and will need updating then.
-    """
-    match = _CONSTRUCT_TYPES.search(reformulate_output)
-    if not match:
-        return {}
-    return {m.group(1): m.group(2) for m in _VAR_RDF_TYPE.finditer(match.group(1))}
-
-
-def _binding_for_type(ontop_type: str, sval: str) -> dict[str, str]:
-    if ontop_type.upper() == "IRI":
-        return {"type": "uri", "value": sval}
-    if ontop_type.startswith("xsd:"):
-        return {
-            "type": "literal",
-            "value": sval,
-            "datatype": f"{_XSD_NS}{ontop_type[4:]}",
-        }
-    if ontop_type.startswith("http://") or ontop_type.startswith("https://"):
-        return {"type": "literal", "value": sval, "datatype": ontop_type}
-    return {"type": "literal", "value": sval}
-
-
-def run_sql(
-    sql: str, token: str, app_settings: Settings
-) -> tuple[list[str], list[tuple]]:
-    from databricks import sql as dbsql
-
-    try:
-        with dbsql.connect(
-            server_hostname=get_workspace_host(),
-            http_path=app_settings.warehouse_http_path,
-            access_token=token,
-        ) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(sql)
-                columns = (
-                    [desc[0] for desc in cursor.description]
-                    if cursor.description
-                    else []
-                )
-                rows = cursor.fetchall()
-    except RequestError as exc:
-        original = (exc.context or {}).get("original-exception")
-        message = str(original).strip() if original else str(exc)
-        raise RuntimeError(message) from exc
-
-    return columns, rows
-
-
-def to_sparql_json(
-    columns: list[str],
-    rows: list[tuple],
-    var_types: dict[str, str] | None = None,
-) -> dict:
-    types = var_types or {}
-    bindings: list[dict[str, dict[str, str]]] = []
-    for row in rows:
-        binding: dict[str, dict[str, str]] = {}
-        for col, val in zip(columns, row, strict=False):
-            if val is None:
-                continue
-            sval = str(val)
-            if col in types:
-                binding[col] = _binding_for_type(types[col], sval)
-            else:
-                binding[col] = {"type": "literal", "value": sval}
-        bindings.append(binding)
-    return {"head": {"vars": columns}, "results": {"bindings": bindings}}
+# Streamable HTTP at mount path /mcp (internal path="/" avoids /mcp/mcp).
+mcp_app = mcp.http_app(path="/")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    global http_client
+async def ontop_lifespan(app: FastAPI):
+    """Prepare Ontop + load ontology cache; start Ontop; tear down on shutdown."""
     client = WorkspaceClient()
     app.state.settings = settings
     app.state.sp_client = client
+    app.state.ontop_manager = ontop_manager
+
     logger.info("Preparing Ontop from volume %s", settings.mappings_volume_path)
     ontop_manager.prepare(client)
     ontop_manager.write_jdbc_properties()
+
+    ontology_store = OntologyStore.load(ontop_manager.ontology_path)
+    app.state.ontology_store = ontology_store
+    logger.info(
+        "Ontology store available=%s path=%s",
+        ontology_store.is_available(),
+        ontop_manager.ontology_path,
+    )
+
     ontop_manager.start()
     http_client = httpx.AsyncClient(timeout=120.0)
-    logger.info("Uvicorn running on 0.0.0.0:%s", settings.app_port)
-    yield
-    ontop_manager.stop()
-    if http_client:
+    app.state.http_client = http_client
+
+    configure_mcp(
+        McpRuntime(
+            ontology_store=ontology_store,
+            ontop_manager=ontop_manager,
+            settings=settings,
+            http_client=http_client,
+        )
+    )
+    logger.info("App initialisation complete")
+    try:
+        yield
+    finally:
+        ontop_manager.stop()
         await http_client.aclose()
 
 
-app = FastAPI(title="Ontop VKG", lifespan=lifespan)
+app = FastAPI(
+    title="Ontop VKG",
+    lifespan=combine_lifespans(ontop_lifespan, mcp_app.lifespan),
+)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+app.mount("/mcp", mcp_app)
 app.include_router(mapping_router, prefix="/api/mapping", tags=["mapping"])
 app.include_router(uc_router, prefix="/api/uc", tags=["uc"])
 app.include_router(
@@ -205,10 +117,11 @@ async def mapper() -> Response:
 
 
 @app.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     return {
         "status": "ok" if ontop_manager.is_running else "degraded",
         "ontop_running": ontop_manager.is_running,
+        "ontology_loaded": request.app.state.ontology_store.is_available(),
     }
 
 
@@ -216,13 +129,6 @@ async def health() -> dict:
 async def sparql(request: Request) -> Response:
     if request.method == "OPTIONS":
         return Response(status_code=204)
-
-    if not ontop_manager.is_running:
-        return Response(
-            content="Ontop is not running",
-            status_code=503,
-            media_type="text/plain",
-        )
 
     try:
         token = get_user_token(request)
@@ -232,60 +138,28 @@ async def sparql(request: Request) -> Response:
             content=detail, status_code=exc.status_code, media_type="text/plain"
         )
 
-    target = f"http://127.0.0.1:{settings.ontop_internal_port}/ontop/reformulate"
-    if request.url.query:
-        target = f"{target}?{request.url.query}"
-
-    headers = {
-        k: v
-        for k, v in request.headers.items()
-        if k.lower() not in {"host", "content-length", "connection"}
-    }
     body = await request.body()
+    result = await execute_sparql_query(
+        body,
+        token,
+        settings,
+        request.app.state.http_client,
+        ontop_manager,
+        method=request.method,
+        query_string=request.url.query,
+        headers=dict(request.headers),
+    )
 
-    assert http_client is not None
-    try:
-        upstream = await http_client.request(
-            request.method,
-            target,
-            headers=headers,
-            content=body if body else None,
-        )
-    except httpx.RequestError:
-        logger.exception(
-            "Failed to reformulate %s request at %s", request.method, target
-        )
+    if isinstance(result, SparqlExecuteError):
         return Response(
-            content="Failed to reach Ontop reformulate endpoint",
-            status_code=502,
+            content=result.message,
+            status_code=result.status_code,
             media_type="text/plain",
         )
 
-    if upstream.status_code >= 400:
-        detail = format_ontop_error(upstream.text, upstream.status_code)
-        logger.error(
-            "Ontop returned %s for %s %s: %s",
-            upstream.status_code,
-            request.method,
-            target,
-            detail[:1000],
-        )
-        return Response(
-            content=detail,
-            status_code=upstream.status_code,
-            media_type="text/plain",
-        )
-
-    var_types = extract_variable_types(upstream.text)
-    sql = extract_native_sql(upstream.text)
-    try:
-        columns, rows = await asyncio.to_thread(run_sql, sql, token, settings)
-    except RuntimeError as exc:
-        logger.exception("Databricks SQL execution failed")
-        return Response(content=str(exc), status_code=502, media_type="text/plain")
-
+    assert isinstance(result, SparqlExecuteSuccess)
     return Response(
-        content=json.dumps(to_sparql_json(columns, rows, var_types)),
+        content=json.dumps(result.data),
         media_type="application/sparql-results+json",
     )
 

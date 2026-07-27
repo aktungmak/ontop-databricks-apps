@@ -47,6 +47,11 @@ class OntopProcessManager:
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
+    @property
+    def ontology_path(self) -> Path | None:
+        """Local path to the downloaded ontology Turtle, if present."""
+        return self._ontology_path
+
     def prepare(self, client: WorkspaceClient) -> None:
         """Download artifacts and mappings from UC volume, extract Ontop bundle."""
         self.work_dir.mkdir(parents=True, exist_ok=True)

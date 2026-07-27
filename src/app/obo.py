@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Mapping
 
 from databricks.sdk import WorkspaceClient
 from fastapi import HTTPException, Request
@@ -19,20 +20,33 @@ def get_workspace_host() -> str:
     return host
 
 
-def get_user_token(request: Request) -> str:
-    """Return the forwarded user OAuth access token or raise 401."""
-    raw = request.headers.get("x-forwarded-access-token")
-    if not raw:
-        raise HTTPException(
-            status_code=401,
-            detail=(
-                "Missing user authorization. Open this app in Databricks and "
-                "approve the requested permissions (user_api_scopes)."
-            ),
-        )
+MISSING_USER_TOKEN = (
+    "Missing user authorization. Open this app in Databricks and "
+    "approve the requested permissions (user_api_scopes)."
+)
+
+
+def normalize_access_token(raw: str) -> str:
+    """Strip optional ``Bearer `` prefix from a forwarded access token."""
     token = raw.strip()
     if token.lower().startswith("bearer "):
         token = token[7:].strip()
+    return token
+
+
+def token_from_headers(headers: Mapping[str, str]) -> str | None:
+    """Return normalized ``x-forwarded-access-token``, or ``None`` if missing."""
+    raw = headers.get("x-forwarded-access-token")
+    if not raw:
+        return None
+    return normalize_access_token(raw)
+
+
+def get_user_token(request: Request) -> str:
+    """Return the forwarded user OAuth access token or raise 401."""
+    token = token_from_headers(request.headers)
+    if not token:
+        raise HTTPException(status_code=401, detail=MISSING_USER_TOKEN)
     return token
 
 

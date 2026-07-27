@@ -78,8 +78,8 @@ targets:
 
       apps:
         ontop_vkg:
-          name: ontop-vkg
-          description: Ontop VKG SPARQL endpoint over DBSQL
+          name: mcp-ontop-vkg
+          description: Ontop VKG + MCP
           source_code_path: ./src/app
           user_api_scopes:
             - catalog.catalogs:read
