@@ -1,0 +1,42 @@
+# Pinned versions of the vendored SPARQL-UI assets in this directory.
+#
+# @matdata/yasgui's published build/ dir references an icon font and Leaflet images
+# that its own npm tarball omits, so those files are supplied here alongside the
+# bundle. Without them every toolbar icon renders blank. Pinning keeps the served
+# UI reproducible.
+#
+# To upgrade: set the versions below, re-fetch the bundle, then list the exact
+# (content-hashed) filenames the new release expects and fetch each one.
+#
+#   C=https://cdn.jsdelivr.net/npm; V=5.20.3
+#   curl -fsSL "$C/@matdata/yasgui@$V/build/yasgui.min.css" -o yasgui.min.css
+#   curl -fsSL "$C/@matdata/yasgui@$V/build/yasgui.min.js"  -o yasgui.min.js
+#   grep -oE 'url\("\./[^"]+"\)' yasgui.min.css | sort -u    # -> names to produce
+#
+# Save each upstream file under the hashed name the CSS asks for:
+#
+#   fa-solid-900-<hash>.woff2   @fortawesome/fontawesome-free@$FA/webfonts/fa-solid-900.woff2
+#   layers-<hash>.png           leaflet@$L/dist/images/layers.png
+#   layers-2x-<hash>.png        leaflet@$L/dist/images/layers-2x.png
+#   marker-icon-<hash>.png      leaflet@$L/dist/images/marker-icon.png
+#   spritesheet-<hash>.png      leaflet-draw@$LD/dist/images/spritesheet.png
+#   spritesheet-2x-<hash>.png   leaflet-draw@$LD/dist/images/spritesheet-2x.png
+#
+# The set is release-dependent (5.11.0 added the Font Awesome font; 5.20.2 added the
+# leaflet-draw spritesheets), so re-check the grep output on every upgrade rather
+# than assuming these six. Behind a proxy, point $C at an internal npm mirror.
+#
+# FA_VERSION must match the Font Awesome release the bundle was built against:
+#   curl -s "$C/@matdata/yasgui@$V/build/yasgui.min.css.map" | grep -o 'Font Awesome Free [0-9.]*'
+#
+# The sub-dependency versions below can be cross-checked against the bundle itself
+# (FA: attribution comment in yasgui.min.css; Leaflet: "Leaflet <v>" license banner
+# in yasgui.min.js; leaflet-draw: L.drawVersion="<v>"). Ignore the "Leaflet.draw
+# 0.2.3+ requires Leaflet 0.7.0+" text — that is a hardcoded runtime error message
+# upstream never updated, not a version marker. YASGUI's own version is not reliably
+# recoverable from the built files, which is the main reason this file exists.
+
+YASGUI_VERSION=5.20.3
+FA_VERSION=7.1.0
+LEAFLET_VERSION=1.9.4
+LEAFLET_DRAW_VERSION=1.0.4
