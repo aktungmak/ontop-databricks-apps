@@ -18,6 +18,42 @@ make run
 
 You will also need to edit `databricks.yml` to set the `catalog` and `schema` variables where the mapping files and other artefacts will be stored (see [Configuration](#configuration) below). The catalog and schema must already exist — the bundle will not create them.
 
+## Required Unity Catalog grants
+
+Two identities are involved, and they need different grants:
+
+| Identity | When | Needs |
+|----------|------|-------|
+| **App service principal** | Ontop startup — schema introspection | `USE CATALOG`, `USE SCHEMA`, **`SELECT`** on the mapped schema |
+| **End user** | Query execution (forwarded token) | Their own `SELECT` on the tables they query |
+
+Grant the app's service principal access to the schema your mapping references:
+
+```sql
+GRANT USE CATALOG ON CATALOG <catalog>            TO `<service-principal-id>`;
+GRANT USE SCHEMA  ON SCHEMA  <catalog>.<schema>   TO `<service-principal-id>`;
+GRANT SELECT      ON SCHEMA  <catalog>.<schema>   TO `<service-principal-id>`;
+```
+
+**`SELECT` is required, not just `USE SCHEMA`.** Ontop's metadata bootstrap runs as the
+service principal and, besides the `SHOW`-family metadata calls, issues one live probe
+per mapped table — `SELECT * FROM <table> subQ LIMIT 1` — to read column types from
+`ResultSetMetaData`. Without `SELECT` the probe fails, metadata enumeration silently
+falls back to the `samples` catalog, and queries fail with:
+
+```
+InvalidMappingSourceQueriesException: Cannot find relation `<catalog>`.`<schema>`.`<table>`
+  (available choices: [`samples`...])
+```
+
+Note this is **separate from data access**: reformulated SQL is executed under the
+*user's* forwarded token, so per-user table/row/column permissions still apply to query
+results. The service principal's `SELECT` is used only for startup introspection — but
+it is a broad grant, since it lets the SP read those tables. If that is not acceptable
+in your environment, Ontop's `endpoint --db-metadata=<file>` can load column types and
+keys from a JSON file produced by `ontop extract-db-metadata`, which skips the live
+probe; the app does not wire that up today.
+
 ## Mappings and ontology
 
 The `mappings/` directory holds the VKG definition that gets uploaded to the UC Volume. It currently contains example TPC-H `mapping.ttl` and `ontology.ttl` files so the project works out of the box — edit or replace these with your own mapping and ontology when setting up your VKG.
