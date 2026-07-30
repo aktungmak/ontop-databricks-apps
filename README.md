@@ -94,6 +94,41 @@ Environment variables are set in `src/app/app.yaml`. Bundle variables in `databr
 | `jdbc_version` | `2.7.5` | Databricks JDBC driver version |
 | `jre_version` | `17.0.19_10` | Temurin JRE version |
 
+## Build-time downloads (external network access)
+
+Deploying the `app` target runs `scripts/download-artifacts.sh` as a bundle artifact
+`build:` step, which **downloads binaries from the public internet**:
+
+| Artifact | Default source | Override |
+|----------|----------------|----------|
+| Ontop CLI zip | `github.com/ontop/ontop` (GitHub Releases) | `ONTOP_BASE_URL` |
+| Temurin JRE 17 | `github.com/adoptium/temurin17-binaries` (GitHub Releases) | `JRE_BASE_URL` |
+| Databricks JDBC driver | `repo1.maven.org` (Maven Central) | `MAVEN_REPO_URL` |
+| ↳ fallback if the above fails | `maven.aliyun.com` | `MAVEN_MIRROR_URL` (set empty to disable) |
+
+**If your organization requires internal mirrors, blocks egress, or intercepts TLS,
+review and adjust these sources before deploying.** Options:
+
+- **Repoint the sources.** Set the override variables above — e.g. to use an internal
+  Maven repository and disable the third-party fallback:
+  ```bash
+  MAVEN_REPO_URL=https://artifacts.example.com/maven2 MAVEN_MIRROR_URL= \
+    ./scripts/download-artifacts.sh
+  ```
+  To apply them to `make deploy-app`, add them to the `build:` block in
+  `databricks.yml` next to the existing version variables.
+- **Pre-populate `artifacts/`.** The script skips any file that already exists, so
+  placing the JRE tarball, Ontop zip, and `DatabricksJDBC42.jar` in `artifacts/` by
+  hand makes the deploy fully offline. This is the simplest air-gapped path.
+
+**Verifying downloads.** No checksums are enforced by default. To pin the exact bytes,
+record them once and the script will verify on every subsequent run (failing the deploy
+on a mismatch):
+
+```bash
+cd artifacts && shasum -a 256 * > SHA256SUMS
+```
+
 ## Verify
 
 ```bash
