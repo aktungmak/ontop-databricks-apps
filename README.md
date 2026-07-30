@@ -18,6 +18,33 @@ make run
 
 You will also need to edit `databricks.yml` to set the `catalog` and `schema` variables where the mapping files and other artefacts will be stored (see [Configuration](#configuration) below). The catalog and schema must already exist — the bundle will not create them.
 
+## Pointing the mapping at your own catalog and schema
+
+Set both of these in `src/app/app.yaml` to the catalog and schema holding the tables
+your mapping reads:
+
+```yaml
+  - name: VKG_DEFAULT_CATALOG
+    value: my_catalog
+  - name: VKG_DEFAULT_SCHEMA
+    value: my_schema
+```
+
+They are applied to **both** connections the app uses — `ConnCatalog`/`ConnSchema` on
+Ontop's JDBC connection, and `catalog`/`schema` on the `databricks-sql-connector`
+connection that executes the reformulated SQL. Both must agree: Ontop renders each
+table using the shortest name relative to its own connection defaults (a table in the
+default schema becomes a bare `supplier`), so if the executing connection has a
+different default those names resolve elsewhere — and if a same-named table exists
+there, they resolve to the wrong table with no error.
+
+Fully-qualified three-part names in the mapping are not sufficient on their own.
+Ontop's Databricks metadata provider reads the default catalog/schema from the
+connection at startup and resolves relations against it; with these unset that is the
+**workspace** default (often `<catalog>.default`), which usually is not the schema your
+mapping targets. Leaving both empty preserves the previous behaviour, which works only
+if the workspace default already happens to be the right schema.
+
 ## Mappings and ontology
 
 The `mappings/` directory holds the VKG definition that gets uploaded to the UC Volume. It currently contains example TPC-H `mapping.ttl` and `ontology.ttl` files so the project works out of the box — edit or replace these with your own mapping and ontology when setting up your VKG.

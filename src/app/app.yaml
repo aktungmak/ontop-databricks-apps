@@ -11,6 +11,13 @@ env:
     value: mapping.ttl
   - name: VKG_ONTOLOGY_FILE
     value: ontology.ttl
+  # Catalog/schema holding the tables the mapping reads. Set both unless the
+  # workspace default already points at that schema — see "Pointing the mapping
+  # at your own catalog and schema" in the README. Empty keeps prior behaviour.
+  - name: VKG_DEFAULT_CATALOG
+    value: ""
+  - name: VKG_DEFAULT_SCHEMA
+    value: ""
   - name: ONTOP_INTERNAL_PORT
     value: "18080"
   - name: FM_MODEL_NAME

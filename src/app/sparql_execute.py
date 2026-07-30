@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Mapping
@@ -120,11 +121,24 @@ def run_sql(
 ) -> tuple[list[str], list[tuple]]:
     from databricks import sql as dbsql
 
+    # Ontop reformulates against the connection's default catalog/schema and may
+    # emit unqualified table names (e.g. `supplier`). Execute the SQL in the same
+    # default context so those names resolve. Mirrors VKG_DEFAULT_CATALOG/SCHEMA
+    # used for the Ontop JDBC connection.
+    default_catalog = os.environ.get("VKG_DEFAULT_CATALOG")
+    default_schema = os.environ.get("VKG_DEFAULT_SCHEMA")
+    connect_kwargs: dict = {}
+    if default_catalog:
+        connect_kwargs["catalog"] = default_catalog
+    if default_schema:
+        connect_kwargs["schema"] = default_schema
+
     try:
         with dbsql.connect(
             server_hostname=get_workspace_host(),
             http_path=app_settings.warehouse_http_path,
             access_token=token,
+            **connect_kwargs,
         ) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(sql)

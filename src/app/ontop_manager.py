@@ -280,6 +280,16 @@ class OntopProcessManager:
             f"AuthMech=11;Auth_Flow=1;"
             f"OAuth2ClientId={client_id};OAuth2Secret={client_secret}"
         )
+        # Set the connection's default catalog/schema to the ones the mapping reads.
+        # Ontop's Databricks metadata provider reads these from the connection at
+        # startup and resolves relations against them; left unset they are the
+        # workspace default, which usually is not the mapped schema.
+        default_catalog = os.environ.get("VKG_DEFAULT_CATALOG")
+        default_schema = os.environ.get("VKG_DEFAULT_SCHEMA")
+        if default_catalog:
+            jdbc_url += f";ConnCatalog={default_catalog}"
+        if default_schema:
+            jdbc_url += f";ConnSchema={default_schema}"
         content = (
             f"jdbc.url={jdbc_url}\n"
             f"jdbc.driver=com.databricks.client.jdbc.Driver\n"
@@ -288,6 +298,8 @@ class OntopProcessManager:
         )
         self.properties_path.write_text(content)
         logger.info("Wrote JDBC M2M OAuth properties for service principal %s", client_id)
+        logger.info("JDBC catalog/schema scoping: ConnCatalog=%s ConnSchema=%s",
+                    default_catalog or "<unset>", default_schema or "<unset>")
 
     def start(self) -> None:
         if self._ontop_binary is None or self._mapping_path is None:
