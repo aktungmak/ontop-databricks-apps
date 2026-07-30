@@ -1,7 +1,7 @@
 """Shared in-process SPARQL execution (Ontop reformulate → DBSQL → SPARQL JSON).
 
-Used by the HTTP ``/sparql`` adapter and (later) MCP ``execute_sparql``. Callers must
-not HTTP-self-call ``/sparql``; invoke ``execute_sparql_query`` instead.
+Callers pass a SPARQL query string. Used by the HTTP ``/sparql`` adapter and
+MCP ``execute_sparql``.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Mapping
+from urllib.parse import urlencode
 
 import httpx
 from databricks.sql.exc import RequestError
@@ -36,7 +36,8 @@ _VAR_RDF_TYPE = re.compile(
 )
 _XSD_NS = "http://www.w3.org/2001/XMLSchema#"
 
-_HOP_BY_HOP = frozenset({"host", "content-length", "connection"})
+# Ontop ReformulateController binds @RequestParam("query") — form body only.
+_REFORMULATE_HEADERS = {"content-type": "application/x-www-form-urlencoded"}
 
 
 @dataclass(frozen=True)
@@ -163,34 +164,12 @@ def to_sparql_json(
     return {"head": {"vars": columns}, "results": {"bindings": bindings}}
 
 
-def _reformulate_request_parts(
-    query_or_request_body: str | bytes,
-    *,
-    method: str,
-    headers: Mapping[str, str] | None,
-) -> tuple[str, dict[str, str], bytes | None]:
-    """Build method/headers/body for Ontop ``/ontop/reformulate``."""
-    out_headers = {
-        k: v for k, v in (headers or {}).items() if k.lower() not in _HOP_BY_HOP
-    }
-    if isinstance(query_or_request_body, str):
-        # MCP / programmatic callers pass a SPARQL query string.
-        out_headers.setdefault("content-type", "application/sparql-query")
-        return method.upper(), out_headers, query_or_request_body.encode("utf-8")
-
-    return method.upper(), out_headers, query_or_request_body or None
-
-
 async def execute_sparql_query(
-    query_or_request_body: str | bytes,
+    query: str,
     token: str,
     settings: Settings,
     http_client: httpx.AsyncClient,
     ontop_manager: OntopProcessManager,
-    *,
-    method: str = "POST",
-    query_string: str = "",
-    headers: Mapping[str, str] | None = None,
 ) -> SparqlExecuteResult:
     """Reformulate via Ontop, run DBSQL with ``token``, return SPARQL JSON or error.
 
@@ -204,24 +183,15 @@ async def execute_sparql_query(
             status_code=503,
         )
 
-    req_method, req_headers, body = _reformulate_request_parts(
-        query_or_request_body,
-        method=method,
-        headers=headers,
-    )
     target = f"http://127.0.0.1:{settings.ontop_internal_port}/ontop/reformulate"
-    if query_string:
-        target = f"{target}?{query_string}"
-
     try:
-        upstream = await http_client.request(
-            req_method,
+        upstream = await http_client.post(
             target,
-            headers=req_headers,
-            content=body,
+            headers=_REFORMULATE_HEADERS,
+            content=urlencode({"query": query}).encode("utf-8"),
         )
     except httpx.RequestError:
-        logger.exception("Failed to reformulate %s request at %s", req_method, target)
+        logger.exception("Failed to reformulate POST request at %s", target)
         return SparqlExecuteError(
             message="Failed to reach Ontop reformulate endpoint",
             status_code=502,
@@ -230,9 +200,8 @@ async def execute_sparql_query(
     if upstream.status_code >= 400:
         detail = format_ontop_error(upstream.text, upstream.status_code)
         logger.error(
-            "Ontop returned %s for %s %s: %s",
+            "Ontop returned %s for POST %s: %s",
             upstream.status_code,
-            req_method,
             target,
             detail[:1000],
         )

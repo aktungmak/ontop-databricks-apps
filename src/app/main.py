@@ -38,12 +38,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+MCP_PATH = "/mcp"
 
 settings = Settings.from_env()
 ontop_manager = OntopProcessManager(settings)
 
-# Streamable HTTP at mount path /mcp (internal path="/" avoids /mcp/mcp).
-mcp_app = mcp.http_app(path="/")
+# Streamable HTTP endpoint at /mcp. The app is mounted at "/" after all FastAPI
+# routes so those routes take precedence without triggering a /mcp redirect.
+# Stateless: Databricks MCP clients do not resend the mcp-session-id header, so a
+# session-bound transport rejects every request after initialize.
+mcp_app = mcp.http_app(path=MCP_PATH, stateless_http=True)
 
 
 @asynccontextmanager
@@ -91,7 +95,6 @@ app = FastAPI(
     lifespan=combine_lifespans(ontop_lifespan, mcp_app.lifespan),
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-app.mount("/mcp", mcp_app)
 app.include_router(mapping_router, prefix="/api/mapping", tags=["mapping"])
 app.include_router(uc_router, prefix="/api/uc", tags=["uc"])
 app.include_router(
@@ -127,6 +130,7 @@ async def health(request: Request) -> dict:
 
 @app.api_route("/sparql", methods=["GET", "POST", "OPTIONS"])
 async def sparql(request: Request) -> Response:
+    """SPARQL Protocol endpoint: GET ``?query=`` or POST form field ``query``."""
     if request.method == "OPTIONS":
         return Response(status_code=204)
 
@@ -138,16 +142,24 @@ async def sparql(request: Request) -> Response:
             content=detail, status_code=exc.status_code, media_type="text/plain"
         )
 
-    body = await request.body()
+    query = request.query_params.get("query")
+    if query is None and request.method == "POST":
+        form = await request.form()
+        value = form.get("query")
+        query = value if isinstance(value, str) else None
+    if not query:
+        return Response(
+            content="Missing required SPARQL request parameter 'query'",
+            status_code=400,
+            media_type="text/plain",
+        )
+
     result = await execute_sparql_query(
-        body,
+        query,
         token,
         settings,
         request.app.state.http_client,
         ontop_manager,
-        method=request.method,
-        query_string=request.url.query,
-        headers=dict(request.headers),
     )
 
     if isinstance(result, SparqlExecuteError):
@@ -162,6 +174,10 @@ async def sparql(request: Request) -> Response:
         content=json.dumps(result.data),
         media_type="application/sparql-results+json",
     )
+
+
+# Keep this catch-all mount last so the FastAPI routes above retain precedence.
+app.mount("/", mcp_app)
 
 
 if __name__ == "__main__":

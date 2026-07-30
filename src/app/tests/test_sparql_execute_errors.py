@@ -71,12 +71,12 @@ def test_ontop_not_running_returns_503() -> None:
     assert isinstance(result, SparqlExecuteError)
     assert result.status_code == 503
     assert result.message == "Ontop is not running"
-    client.request.assert_not_called()
+    client.post.assert_not_called()
 
 
 def test_ontop_unreachable_returns_502_without_sql() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.request.side_effect = httpx.ConnectError("connection refused")
+    client.post.side_effect = httpx.ConnectError("connection refused")
 
     result = asyncio.run(
         execute_sparql_query(
@@ -102,7 +102,7 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
         '"message":"Unsupported SPARQL feature: MINUS","path":"/ontop/reformulate"}'
     )
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.request.return_value = upstream
+    client.post.return_value = upstream
 
     result = asyncio.run(
         execute_sparql_query(
@@ -125,7 +125,7 @@ def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.request.return_value = upstream
+    client.post.return_value = upstream
 
     with patch(
         "sparql_execute.run_sql",
@@ -152,7 +152,7 @@ def test_success_returns_sparql_json_not_sql() -> None:
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.request.return_value = upstream
+    client.post.return_value = upstream
 
     with patch(
         "sparql_execute.run_sql",

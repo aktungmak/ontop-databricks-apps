@@ -154,7 +154,6 @@ async def execute_sparql(query: str) -> dict[str, Any] | str:
         runtime.settings,
         runtime.http_client,
         runtime.ontop_manager,
-        method="POST",
     )
 
     if isinstance(result, SparqlExecuteError):
