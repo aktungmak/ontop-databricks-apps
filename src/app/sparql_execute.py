@@ -121,12 +121,16 @@ def run_sql(
 ) -> tuple[list[str], list[tuple]]:
     from databricks import sql as dbsql
 
+    connection_options = {
+        "server_hostname": get_workspace_host(),
+        "http_path": app_settings.warehouse_http_path,
+        "access_token": token,
+        "catalog": app_settings.default_catalog,
+        "schema": app_settings.default_schema,
+    }
+
     try:
-        with dbsql.connect(
-            server_hostname=get_workspace_host(),
-            http_path=app_settings.warehouse_http_path,
-            access_token=token,
-        ) as conn:
+        with dbsql.connect(**connection_options) as conn:
             with conn.cursor() as cursor:
                 cursor.execute(sql)
                 columns = (

@@ -31,6 +31,8 @@ def _settings() -> Settings:
         mappings_volume_path="/Volumes/test/mappings",
         mapping_file="mapping.ttl",
         ontology_file="ontology.ttl",
+        default_catalog="test_catalog",
+        default_schema="test_schema",
         ontop_internal_port=18080,
         app_port=8000,
         work_dir=Path("/tmp/ontop-vkg-test"),

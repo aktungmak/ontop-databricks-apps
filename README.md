@@ -119,12 +119,15 @@ TBox tools use the in-memory ontology only. `execute_sparql` uses Ontop + Databr
 
 ## Configuration
 
-Environment variables are set in `src/app/app.yaml`. Bundle variables in `databricks.yml`:
+The app's start command and environment variables are defined under the app's `config`
+block in `databricks.yml` rather than having a separate `app.yaml`.
+
+Bundle variables in `databricks.yml`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `catalog` | `ontop_vkg` | UC catalog for volume |
-| `schema` | `default` | UC schema for volume |
+| `catalog` | `tagsonomy` | UC catalog for volume and connection default |
+| `schema` | `ontop` | UC schema for volume and connection default |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
 | `ontop_version` | `5.5.0` | Ontop release version |
 | `jdbc_version` | `2.7.5` | Databricks JDBC driver version |

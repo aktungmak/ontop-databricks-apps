@@ -81,6 +81,29 @@ targets:
           name: mcp-ontop-vkg
           description: Ontop VKG + MCP
           source_code_path: ./src/app
+          # config replaces app.yaml wholesale per field, so command and the
+          # full env list must both live here.
+          config:
+            command:
+              - python
+              - main.py
+            env:
+              - name: DATABRICKS_WAREHOUSE_ID
+                value_from: sql-warehouse
+              - name: MAPPINGS_VOLUME_PATH
+                value_from: mappings-volume
+              - name: VKG_MAPPING_FILE
+                value: ${var.mapping_file}
+              - name: VKG_ONTOLOGY_FILE
+                value: ${var.ontology_file}
+              - name: ONTOP_INTERNAL_PORT
+                value: "18080"
+              - name: FM_MODEL_NAME
+                value: databricks-claude-opus-4-6
+              - name: VKG_DEFAULT_CATALOG
+                value: ${var.catalog}
+              - name: VKG_DEFAULT_SCHEMA
+                value: ${var.schema}
           user_api_scopes:
             - catalog.catalogs:read
             - catalog.schemas:read
