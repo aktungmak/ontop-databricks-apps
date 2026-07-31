@@ -278,7 +278,9 @@ class OntopProcessManager:
             f"jdbc:databricks://{host}:443;"
             f"HttpPath={self.settings.warehouse_http_path};"
             f"AuthMech=11;Auth_Flow=1;"
-            f"OAuth2ClientId={client_id};OAuth2Secret={client_secret}"
+            f"OAuth2ClientId={client_id};OAuth2Secret={client_secret};"
+            f"ConnCatalog={self.settings.default_catalog};"
+            f"ConnSchema={self.settings.default_schema}"
         )
         content = (
             f"jdbc.url={jdbc_url}\n"

@@ -13,6 +13,8 @@ class Settings:
     mappings_volume_path: str
     mapping_file: str
     ontology_file: str
+    default_catalog: str
+    default_schema: str
     ontop_internal_port: int
     app_port: int
     work_dir: Path
@@ -24,11 +26,21 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
+        default_catalog = os.environ.get("VKG_DEFAULT_CATALOG", "").strip()
+        default_schema = os.environ.get("VKG_DEFAULT_SCHEMA", "").strip()
+        if not default_catalog or not default_schema:
+            raise RuntimeError(
+                "VKG_DEFAULT_CATALOG and VKG_DEFAULT_SCHEMA are required "
+                "and must be non-empty"
+            )
+
         return cls(
             warehouse_id=os.environ["DATABRICKS_WAREHOUSE_ID"],
             mappings_volume_path=os.environ["MAPPINGS_VOLUME_PATH"],
             mapping_file=os.environ.get("VKG_MAPPING_FILE", "mapping.ttl"),
             ontology_file=os.environ.get("VKG_ONTOLOGY_FILE", "ontology.ttl"),
+            default_catalog=default_catalog,
+            default_schema=default_schema,
             ontop_internal_port=int(os.environ.get("ONTOP_INTERNAL_PORT", "18080")),
             app_port=int(os.environ.get("DATABRICKS_APP_PORT", "8000")),
             work_dir=Path("/tmp/ontop-vkg"),
