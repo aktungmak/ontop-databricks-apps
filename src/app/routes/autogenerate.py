@@ -258,7 +258,6 @@ async def _generate_table_mapping(
             model=fm_model_name,
             messages=messages,
             max_tokens=4096,
-            temperature=0.2,
         )
         content = response.choices[0].message.content or ""
         turtle = _extract_turtle(content)
