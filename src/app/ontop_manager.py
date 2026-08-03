@@ -287,6 +287,12 @@ class OntopProcessManager:
             f"jdbc.driver=com.databricks.client.jdbc.Driver\n"
             "ontop.enableFactExtractionWithTBox=true\n"
             "ontop.reformulateToFullNativeQuery=true\n"
+            # Mapping source queries commonly expose derived columns (CONCAT(...) AS
+            # Label, computed join keys) whose SQL type Ontop cannot infer. Without
+            # this it refuses to load the *entire* mapping with
+            # UnknownDatatypeException, so a single untyped expression breaks startup.
+            # Treat those as xsd:string instead of failing.
+            "ontop.inferDefaultDatatype=true\n"
         )
         self.properties_path.write_text(content)
         logger.info("Wrote JDBC M2M OAuth properties for service principal %s", client_id)
