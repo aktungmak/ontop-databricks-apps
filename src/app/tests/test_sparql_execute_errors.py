@@ -220,6 +220,35 @@ def test_permission_denial_returns_403_summary() -> None:
     _error_has_no_native_sql(result)
 
 
+def test_non_permission_dbsql_error_returns_502() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    # A server-side error that is NOT a permission denial (no 42501 token).
+    syntax_err = ServerOperationError(
+        "[UNRESOLVED_COLUMN] A column with name `nope` cannot be resolved.",
+        context={"operation-id": "y"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=syntax_err):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 502
+    assert "UNRESOLVED_COLUMN" in result.message
+    _error_has_no_native_sql(result)
+
+
 def test_success_returns_sparql_json_not_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
