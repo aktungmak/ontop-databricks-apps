@@ -187,6 +187,39 @@ def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
     _error_has_no_native_sql(result)
 
 
+from databricks.sql.exc import ServerOperationError
+
+
+def test_permission_denial_returns_403_summary() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    denial = ServerOperationError(
+        TABLE_DENIAL,
+        context={"operation-id": "x", "diagnostic-info": "org.apache.spark...HUGE"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=denial):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c ?name WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 403
+    assert "You lack Unity Catalog access" in result.message
+    assert "SELECT on Table 'cat.sch.tbl'" in result.message
+    assert "org.apache.spark" not in result.message
+    _error_has_no_native_sql(result)
+
+
 def test_success_returns_sparql_json_not_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200

@@ -241,8 +241,16 @@ async def execute_sparql_query(
     sql = extract_native_sql(upstream.text)
     try:
         columns, rows = await asyncio.to_thread(run_sql, sql, token, settings)
-    except RuntimeError as exc:
+    except (RuntimeError, DbsqlError) as exc:
         logger.exception("Databricks SQL execution failed")
-        return SparqlExecuteError(message=str(exc), status_code=502)
+        message = str(exc)
+        if is_permission_denied(message):
+            return SparqlExecuteError(
+                message=permission_denied_summary(message),
+                status_code=403,
+            )
+        # Non-permission DBSQL/execution failures: surface the message (never the
+        # native SQL or exc.context) as a 502.
+        return SparqlExecuteError(message=message, status_code=502)
 
     return SparqlExecuteSuccess(data=to_sparql_json(columns, rows, var_types))
