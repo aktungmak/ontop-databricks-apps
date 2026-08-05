@@ -249,6 +249,39 @@ def test_non_permission_dbsql_error_returns_502() -> None:
     _error_has_no_native_sql(result)
 
 
+def test_non_permission_error_scrubs_native_sql() -> None:
+    """Fix A: multi-line error with embedded SQL must be scrubbed to last-line-only."""
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    # Multi-line error: SQL echo on earlier lines, useful hint on the last line.
+    # _last_line must return the hint and discard the SQL echo.
+    multiline_err = ServerOperationError(
+        "SELECT c, name FROM books WHERE c = 'secret'\n"
+        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'FROM'.",
+        context={"operation-id": "z"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=multiline_err):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c ?name WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 502
+    assert "PARSE_SYNTAX_ERROR" in result.message
+    assert "SELECT c, name FROM books" not in result.message
+    _error_has_no_native_sql(result)
+
+
 def test_success_returns_sparql_json_not_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200

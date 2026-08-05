@@ -93,12 +93,18 @@ def format_ontop_error(body: str, status_code: int) -> str:
 # Unity Catalog permission denials arrive as databricks.sql.exc.ServerOperationError
 # with SQLSTATE 42501 and an [INSUFFICIENT_PERMISSIONS] prefix. These tokens are emitted
 # verbatim by the SQL warehouse for catalog-, schema-, and table-level denials.
-_PERMISSION_TOKENS = ("42501", "INSUFFICIENT_PERMISSIONS")
+_PERMISSION_TOKENS = ("SQLSTATE: 42501", "INSUFFICIENT_PERMISSIONS")
 
 
 def is_permission_denied(message: str) -> bool:
     """True when a DBSQL error message is a Unity Catalog authorization denial."""
     return any(token in message for token in _PERMISSION_TOKENS)
+
+
+def _last_line(message: str) -> str:
+    """Last non-empty line of a driver error, dropping any multi-line SQL echo."""
+    lines = [ln.strip() for ln in message.splitlines() if ln.strip()]
+    return lines[-1] if lines else message.strip()
 
 
 def permission_denied_summary(message: str) -> str:
@@ -108,9 +114,7 @@ def permission_denied_summary(message: str) -> str:
     privilege, e.g. "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501").
     Never includes exc.context, so the multi-KB Java stacktrace cannot leak.
     """
-    lines = [ln.strip() for ln in message.splitlines() if ln.strip()]
-    detail = lines[-1] if lines else message.strip()
-    return f"You lack Unity Catalog access to an object this query requires: {detail}"
+    return f"You lack Unity Catalog access to an object this query requires: {_last_line(message)}"
 
 
 def extract_variable_types(reformulate_output: str) -> dict[str, str]:
@@ -249,8 +253,8 @@ async def execute_sparql_query(
                 message=permission_denied_summary(message),
                 status_code=403,
             )
-        # Non-permission DBSQL/execution failures: surface the message (never the
-        # native SQL or exc.context) as a 502.
-        return SparqlExecuteError(message=message, status_code=502)
+        # Non-permission DBSQL/execution failures: surface only the last non-empty
+        # line (never the native SQL or exc.context) as a 502.
+        return SparqlExecuteError(message=_last_line(message), status_code=502)
 
     return SparqlExecuteSuccess(data=to_sparql_json(columns, rows, var_types))
