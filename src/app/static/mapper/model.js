@@ -585,14 +585,18 @@ export function parseTriplesMaps(storeOrQuads) {
   return maps;
 }
 
+// encodeURIComponent leaves !'()* unescaped since Python's quote(fqn, safe="") in
+// backend autogenerate path escapes everything outside the RFC 3986 unreserved
+// set. Unity Catalog allows those five in quoted identifiers, so they are escaped
+// here too or the two paths would name the same table differently.
+const NON_UNRESERVED = /[!'()*]/g;
+
 export function tableToFragmentId(tableName) {
-  const seg = (tableName || 'Map').split('.').pop() || 'Map';
-  const pascal = seg
-    .split(/[_\-.]+/)
-    .filter(Boolean)
-    .map((p) => p.charAt(0).toUpperCase() + p.slice(1).toLowerCase())
-    .join('');
-  return `#${pascal || 'Map'}`;
+  const encoded = encodeURIComponent(tableName || '').replace(
+    NON_UNRESERVED,
+    (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `#${encoded || 'Map'}`;
 }
 
 function iriTerm(iri, prefixes) {
@@ -606,8 +610,15 @@ function literalTerm(value) {
   return literal(value);
 }
 
+// Distinct map ids must stay distinct here: the result labels the blank nodes of
+// a triples map, so two ids collapsing to one label would make two maps share a
+// logical table. Dropping characters is not injective since `main.sales.orders` and
+// `main.sale.sorders` collide, so each character outside [a-zA-Z0-9], including
+// `_` itself, becomes a delimited `_<hex>_` escape.
 function sanitizeMapId(mapId) {
-  return mapId.replace(/[^a-zA-Z0-9]/g, '');
+  return normalizeMapId(mapId)
+    .slice(1)
+    .replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0).toString(16).toUpperCase()}_`);
 }
 
 function normalizeMapId(mapId) {
