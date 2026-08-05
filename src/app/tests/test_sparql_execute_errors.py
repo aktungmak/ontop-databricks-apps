@@ -14,6 +14,44 @@ from sparql_execute import (
     SparqlExecuteSuccess,
     execute_sparql_query,
 )
+from sparql_execute import is_permission_denied, permission_denied_summary
+
+TABLE_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501"
+)
+SCHEMA_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have USE SCHEMA on Schema 'cat.sch'. SQLSTATE: 42501"
+)
+CATALOG_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have USE CATALOG on Catalog 'cat'. SQLSTATE: 42501"
+)
+CATALOG_SCOPE_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "Catalog 'cat' is not accessible in current workspace SQLSTATE: 42501"
+)
+
+
+def test_is_permission_denied_matches_all_levels() -> None:
+    for msg in (TABLE_DENIAL, SCHEMA_DENIAL, CATALOG_DENIAL, CATALOG_SCOPE_DENIAL):
+        assert is_permission_denied(msg) is True
+
+
+def test_is_permission_denied_ignores_other_errors() -> None:
+    assert is_permission_denied("Warehouse is stopped") is False
+    assert is_permission_denied("[PARSE_SYNTAX_ERROR] near 'SELCT'") is False
+
+
+def test_permission_denied_summary_is_single_line_no_stack() -> None:
+    summary = permission_denied_summary(TABLE_DENIAL)
+    assert summary == (
+        "You lack Unity Catalog access to an object this query requires: "
+        "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501"
+    )
+    assert "\n" not in summary
+    assert "org.apache.spark" not in summary
 
 NATIVE_SQL = "SELECT c, name FROM books WHERE c = 'secret'"
 
