@@ -38,10 +38,33 @@ const PREFIXES = {
 };
 
 describe('tableToFragmentId', () => {
-  it('converts dotted table names to PascalCase fragment ids', () => {
-    assert.equal(tableToFragmentId('samples.tpch.customer'), '#Customer');
-    assert.equal(tableToFragmentId('samples.tpch.orders'), '#Orders');
-    assert.equal(tableToFragmentId('my_db.public.line_item'), '#LineItem');
+  it('uses the whole fully qualified name so same-named tables do not collide', () => {
+    assert.equal(tableToFragmentId('samples.tpch.customer'), '#samples.tpch.customer');
+    assert.equal(tableToFragmentId('other.crm.customer'), '#other.crm.customer');
+    assert.equal(tableToFragmentId('my_db.public.line_item'), '#my_db.public.line_item');
+  });
+
+  it('leaves the RFC 3986 unreserved set unescaped', () => {
+    assert.equal(tableToFragmentId('cat.sch.my_table-v1~2'), '#cat.sch.my_table-v1~2');
+  });
+
+  // Expected values are the output of Python's quote(fqn, safe="") in
+  // src/app/routes/autogenerate.py; the two paths must agree byte for byte.
+  it('escapes the characters encodeURIComponent leaves alone', () => {
+    assert.equal(tableToFragmentId("cat.sch.a!b'c(d)e*f"), '#cat.sch.a%21b%27c%28d%29e%2Af');
+  });
+
+  it('percent-encodes characters Turtle forbids in an IRI', () => {
+    assert.equal(
+      tableToFragmentId('cat.sch.a b#c<d>e"f{g}h|i^j`k\\l%m'),
+      '#cat.sch.a%20b%23c%3Cd%3Ee%22f%7Bg%7Dh%7Ci%5Ej%60k%5Cl%25m',
+    );
+  });
+
+  it('percent-encodes non-ASCII as UTF-8 with uppercase hex', () => {
+    assert.equal(tableToFragmentId('cat.sch.naïve'), '#cat.sch.na%C3%AFve');
+    assert.equal(tableToFragmentId('cat.sch.客户表'), '#cat.sch.%E5%AE%A2%E6%88%B7%E8%A1%A8');
+    assert.equal(tableToFragmentId('cat.sch.🙂'), '#cat.sch.%F0%9F%99%82');
   });
 
   it('returns #Map for empty input', () => {
@@ -185,16 +208,16 @@ describe('parent join serialization', () => {
     const store = new Store();
     addTriplesMap(store, newEmptyCard('samples.tpch.customer'), PREFIXES);
     addTriplesMap(store, newEmptyCard('samples.tpch.orders'), PREFIXES);
-    addPredicateObjectMap(store, '#Orders');
+    addPredicateObjectMap(store, '#samples.tpch.orders');
     updatePredicateObjectMap(
       store,
-      '#Orders',
+      '#samples.tpch.orders',
       0,
       {
         predicate: 'ex:placedBy',
         objectMap: {
           type: 'parentJoin',
-          parentTriplesMap: '#Customer',
+          parentTriplesMap: '#samples.tpch.customer',
           joinCondition,
         },
       },
@@ -232,7 +255,24 @@ describe('parent join serialization', () => {
   it('round-trips parent join with both columns', () => {
     const store = parentJoinStore({ child: 'o_custkey', parent: 'c_custkey' });
     const maps = parseTriplesMaps(store);
-    const order = maps.find((m) => m.id === '#Orders');
+    const order = maps.find((m) => m.id === '#samples.tpch.orders');
+    assert.deepEqual(order.predicateObjectMaps[0].objectMap.joinCondition, {
+      child: 'o_custkey',
+      parent: 'c_custkey',
+    });
+  });
+
+  it('round-trips a parent join through Turtle with dotted fragment ids', async () => {
+    const store = parentJoinStore({ child: 'o_custkey', parent: 'c_custkey' });
+    const turtle = await serializeStore(store, PREFIXES);
+    const order = parseTriplesMaps(parseTurtle(turtle, PREFIXES)).find(
+      (m) => m.id === '#samples.tpch.orders',
+    );
+    assert.ok(order);
+    assert.equal(
+      order.predicateObjectMaps[0].objectMap.parentTriplesMap,
+      '#samples.tpch.customer',
+    );
     assert.deepEqual(order.predicateObjectMaps[0].objectMap.joinCondition, {
       child: 'o_custkey',
       parent: 'c_custkey',
@@ -240,10 +280,99 @@ describe('parent join serialization', () => {
   });
 });
 
+describe('fully qualified fragment ids', () => {
+  it('round-trips a card whose fragment contains dots', async () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard('samples.tpch.customer'), PREFIXES);
+    updateSubjectMap(
+      store,
+      '#samples.tpch.customer',
+      { template: 'http://example.org/tpch/customer/{c_custkey}', column: '', class: 'ex:Customer' },
+      PREFIXES,
+    );
+
+    const before = parseTriplesMaps(store);
+    const turtle = await serializeStore(store, PREFIXES);
+    assert.match(turtle, /<#samples\.tpch\.customer>/);
+
+    const after = parseTriplesMaps(parseTurtle(turtle, PREFIXES));
+    assert.deepEqual(after, before);
+    assert.equal(after[0].id, '#samples.tpch.customer');
+    assert.equal(after[0].logicalTable.value, 'samples.tpch.customer');
+  });
+
+  it('round-trips a card whose fragment contains percent escapes', async () => {
+    const store = new Store();
+    const table = 'cat.sch.odd name!';
+    const card = newEmptyCard(table);
+    assert.equal(card.id, '#cat.sch.odd%20name%21');
+    addTriplesMap(store, card, PREFIXES);
+
+    const turtle = await serializeStore(store, PREFIXES);
+    const maps = parseTriplesMaps(parseTurtle(turtle, PREFIXES));
+    assert.equal(maps.length, 1);
+    assert.equal(maps[0].id, card.id);
+    assert.equal(maps[0].logicalTable.value, table);
+  });
+
+  it('keeps logical tables separate for ids that differ only in dot placement', async () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard('main.sales.orders'), PREFIXES);
+    addTriplesMap(store, newEmptyCard('main.sale.sorders'), PREFIXES);
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    assert.equal(maps.length, 2);
+    assert.deepEqual(
+      maps.map((m) => m.logicalTable.value).sort(),
+      ['main.sale.sorders', 'main.sales.orders'],
+    );
+  });
+});
+
+describe('legacy PascalCase documents', () => {
+  const legacyTurtle = `@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ex: <http://example.org/tpch/> .
+
+<#Customer> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.customer" ] ;
+  rr:subjectMap [ rr:template "http://example.org/tpch/customer/{c_custkey}" ; rr:class ex:Customer ] .
+`;
+
+  it('parses and edits a document with arbitrary fragment names', async () => {
+    const store = parseTurtle(legacyTurtle, PREFIXES);
+    assert.equal(parseTriplesMaps(store)[0].id, '#Customer');
+
+    updateLogicalTable(store, '#Customer', { type: 'tableName', value: 'samples.tpch.customer2' });
+    addPredicateObjectMap(store, '#Customer');
+    updatePredicateObjectMap(
+      store,
+      '#Customer',
+      0,
+      { predicate: 'ex:name', objectMap: { type: 'column', column: 'c_name' } },
+      PREFIXES,
+    );
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    assert.equal(maps.length, 1);
+    assert.equal(maps[0].id, '#Customer');
+    assert.equal(maps[0].logicalTable.value, 'samples.tpch.customer2');
+    assert.equal(maps[0].subjectMap.class, 'http://example.org/tpch/Customer');
+    assert.equal(maps[0].predicateObjectMaps[0].objectMap.column, 'c_name');
+  });
+
+  it('coexists with a newly created fully qualified card', async () => {
+    const store = parseTurtle(legacyTurtle, PREFIXES);
+    addTriplesMap(store, newEmptyCard('samples.tpch.orders'), PREFIXES);
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    assert.deepEqual(maps.map((m) => m.id).sort(), ['#Customer', '#samples.tpch.orders']);
+  });
+});
+
 describe('newEmptyCard', () => {
   it('builds a card from a table name', () => {
     const card = newEmptyCard('samples.tpch.orders');
-    assert.equal(card.id, '#Orders');
+    assert.equal(card.id, '#samples.tpch.orders');
     assert.deepEqual(card.logicalTable, {
       type: 'tableName',
       value: 'samples.tpch.orders',
@@ -258,6 +387,23 @@ describe('newEmptyCard', () => {
     assert.equal(card.id, '#NewMap');
     assert.equal(card.logicalTable.value, '');
   });
+
+  // mapper.js renames a card only while its id is still the #NewMap placeholder.
+  it('renames the placeholder card once a table is picked', async () => {
+    const store = new Store();
+    const card = newEmptyCard();
+    addTriplesMap(store, card, PREFIXES);
+    assert.equal(card.id, '#NewMap');
+
+    const table = 'samples.tpch.orders';
+    updateLogicalTable(store, card.id, { type: 'tableName', value: table });
+    renameTriplesMap(store, card.id, tableToFragmentId(table));
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    assert.equal(maps.length, 1);
+    assert.equal(maps[0].id, '#samples.tpch.orders');
+    assert.equal(maps[0].logicalTable.value, table);
+  });
 });
 
 describe('card CRUD', () => {
@@ -268,10 +414,10 @@ describe('card CRUD', () => {
 
     let maps = parseTriplesMaps(store);
     assert.equal(maps.length, 1);
-    assert.equal(maps[0].id, '#Orders');
+    assert.equal(maps[0].id, '#samples.tpch.orders');
     assert.equal(maps[0].logicalTable.value, 'samples.tpch.orders');
 
-    updateLogicalTable(store, '#Orders', {
+    updateLogicalTable(store, '#samples.tpch.orders', {
       type: 'tableName',
       value: 'samples.tpch.order_renamed',
     });
@@ -280,7 +426,7 @@ describe('card CRUD', () => {
 
     updateSubjectMap(
       store,
-      '#Orders',
+      '#samples.tpch.orders',
       {
         template: 'http://example.org/tpch/order/{o_orderkey}',
         column: '',
@@ -292,7 +438,7 @@ describe('card CRUD', () => {
     assert.equal(maps[0].subjectMap.template, 'http://example.org/tpch/order/{o_orderkey}');
     assert.equal(maps[0].subjectMap.class, 'http://example.org/tpch/Order');
 
-    addPredicateObjectMap(store, '#Orders');
+    addPredicateObjectMap(store, '#samples.tpch.orders');
     maps = parseTriplesMaps(store);
     assert.equal(maps[0].predicateObjectMaps.length, 1);
     assert.equal(maps[0].predicateObjectMaps[0].objectMap.type, 'column');
@@ -300,7 +446,7 @@ describe('card CRUD', () => {
 
     updatePredicateObjectMap(
       store,
-      '#Orders',
+      '#samples.tpch.orders',
       0,
       {
         predicate: 'ex:orderKey',
@@ -313,9 +459,9 @@ describe('card CRUD', () => {
     assert.equal(maps[0].predicateObjectMaps[0].objectMap.column, 'o_orderkey');
     assert.equal(maps[0].predicateObjectMaps[0].objectMap.datatype, 'http://www.w3.org/2001/XMLSchema#integer');
 
-    renameTriplesMap(store, '#Orders', '#Order');
+    renameTriplesMap(store, '#samples.tpch.orders', '#Order');
     maps = parseTriplesMaps(store);
-    assert.ok(!maps.some((m) => m.id === '#Orders'));
+    assert.ok(!maps.some((m) => m.id === '#samples.tpch.orders'));
     assert.ok(maps.some((m) => m.id === '#Order'));
 
     removeTriplesMap(store, '#Order');
