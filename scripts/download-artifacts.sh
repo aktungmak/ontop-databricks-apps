@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/artifacts"
 
 ONTOP_VERSION="${ONTOP_VERSION:-5.5.0}"
-JDBC_VERSION="${JDBC_VERSION:-2.7.5}"
+JDBC_VERSION="${JDBC_VERSION:-3.4.1}"
 JRE_VERSION="${JRE_VERSION:-17.0.19_10}"
 
 # Source hosts — override to use an internal mirror / proxy.
@@ -24,6 +24,7 @@ MAVEN_MIRROR_URL="${MAVEN_MIRROR_URL-https://maven.aliyun.com/repository/central
 
 ONTOP_ZIP="ontop-cli-${ONTOP_VERSION}.zip"
 JRE_TARBALL="OpenJDK17U-jre_x64_linux_hotspot_${JRE_VERSION}.tar.gz"
+JDBC_JAR="databricks-jdbc-${JDBC_VERSION}.jar"
 
 # Temurin release tags look like "jdk-17.0.19+10" while the tarball uses
 # "17.0.19_10". Derive the tag from JRE_VERSION so the two cannot disagree
@@ -44,11 +45,14 @@ if [[ ! -f "${OUT}/${JRE_TARBALL}" ]]; then
   curl -fsSL -o "${OUT}/${JRE_TARBALL}" "${JRE_URL}"
 fi
 
-if [[ ! -f "${OUT}/DatabricksJDBC42.jar" ]]; then
-  if ! curl -fsSL -o "${OUT}/DatabricksJDBC42.jar" "${MAVEN_REPO_URL}/${JDBC_PATH}"; then
+if [[ ! -f "${OUT}/${JDBC_JAR}" ]]; then
+  # Remove any older databricks-jdbc-*.jar so a version bump does not leave a
+  # stale driver alongside the new one (the app discovers the jar by glob).
+  rm -f "${OUT}"/databricks-jdbc-*.jar
+  if ! curl -fsSL -o "${OUT}/${JDBC_JAR}" "${MAVEN_REPO_URL}/${JDBC_PATH}"; then
     if [[ -n "${MAVEN_MIRROR_URL}" ]]; then
       echo "Primary Maven repo failed; falling back to ${MAVEN_MIRROR_URL}" >&2
-      curl -fsSL -o "${OUT}/DatabricksJDBC42.jar" "${MAVEN_MIRROR_URL}/${JDBC_PATH}"
+      curl -fsSL -o "${OUT}/${JDBC_JAR}" "${MAVEN_MIRROR_URL}/${JDBC_PATH}"
     else
       echo "Failed to download the Databricks JDBC driver from ${MAVEN_REPO_URL}" >&2
       exit 1

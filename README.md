@@ -130,7 +130,7 @@ Bundle variables in `databricks.yml`:
 | `schema` | `ontop` | UC schema for volume and connection default |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
 | `ontop_version` | `5.5.0` | Ontop release version |
-| `jdbc_version` | `2.7.5` | Databricks JDBC driver version |
+| `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
 | `jre_version` | `17.0.19_10` | Temurin JRE version |
 
 ## Build-time downloads (external network access)
@@ -157,8 +157,9 @@ review and adjust these sources before deploying.** Options:
   To apply them to `make deploy-app`, add them to the `build:` block in
   `databricks.yml` next to the existing version variables.
 - **Pre-populate `artifacts/`.** The script skips any file that already exists, so
-  placing the JRE tarball, Ontop zip, and `DatabricksJDBC42.jar` in `artifacts/` by
-  hand makes the deploy fully offline. This is the simplest air-gapped path.
+  placing the JRE tarball, Ontop zip, and `databricks-jdbc-<version>.jar` in
+  `artifacts/` by hand makes the deploy fully offline. This is the simplest
+  air-gapped path.
 
 **Verifying downloads.** No checksums are enforced by default. To pin the exact bytes,
 record them once and the script will verify on every subsequent run (failing the deploy
