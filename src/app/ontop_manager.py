@@ -37,6 +37,13 @@ class OntopProcessManager:
         self.ontop_dir = self.work_dir / "ontop"
         self.mappings_dir = self.work_dir / "mappings"
         self.properties_path = self.work_dir / "connection.properties"
+        # Ontop's own stdout/stderr go to this file rather than a PIPE. Eager init
+        # (--lazy absent) logs verbosely in --dev mode; an undrained PIPE fills the
+        # ~64KB OS buffer, the JVM blocks on write, and repository.init() deadlocks
+        # before the port opens — surfacing as a _wait_for_port timeout. A file sink
+        # never backpressures and keeps the init log inspectable.
+        self.ontop_log_path = self.work_dir / "ontop.log"
+        self._log_file = None
         self._process: subprocess.Popen[bytes] | None = None
         self._ontop_binary: Path | None = None
         self._java_home: Path | None = None
@@ -333,9 +340,10 @@ class OntopProcessManager:
             " ".join(cmd),
             env.get("JAVA_HOME", "<unset>"),
         )
+        self._log_file = open(self.ontop_log_path, "wb")
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
+            stdout=self._log_file,
             stderr=subprocess.STDOUT,
             cwd=str(self._ontop_binary.parent),
             env=env,
@@ -345,7 +353,14 @@ class OntopProcessManager:
         # larger mappings or a cold warehouse. A genuine failure still aborts promptly:
         # _wait_for_port polls the subprocess each iteration and raises with its output.
         started_at = time.time()
-        self._wait_for_port(self.settings.ontop_internal_port, timeout=600)
+        try:
+            self._wait_for_port(self.settings.ontop_internal_port, timeout=600)
+        except Exception:
+            # start() runs before the lifespan's try/finally, so stop() never runs on
+            # a startup failure. Close the log handle here so it does not leak.
+            self._log_file.close()
+            self._log_file = None
+            raise
         logger.info(
             "Ontop endpoint started on port %s (mapping initialised in %.1fs)",
             self.settings.ontop_internal_port,
@@ -363,20 +378,36 @@ class OntopProcessManager:
                 self._process.kill()
                 self._process.wait(timeout=10)
         self._process = None
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
         self._wait_for_port_free(self.settings.ontop_internal_port, timeout=30)
+
+    def _read_ontop_log(self, tail: int | None = None) -> str:
+        """Return Ontop's captured stdout/stderr from the log file (optionally the tail)."""
+        try:
+            text = self.ontop_log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return ""
+        if tail is not None:
+            lines = text.splitlines()
+            text = "\n".join(lines[-tail:])
+        return text
 
     def _wait_for_port(self, port: int, timeout: float) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._process and self._process.poll() is not None:
-                output = ""
-                if self._process.stdout:
-                    output = self._process.stdout.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"Ontop exited early:\n{output}")
+                raise RuntimeError(f"Ontop exited early:\n{self._read_ontop_log()}")
             if self._port_open(port):
                 return
             time.sleep(0.5)
-        raise TimeoutError(f"Ontop did not open port {port} within {timeout}s")
+        # Include the log tail so a genuinely slow or stuck init is diagnosable
+        # from the app logs rather than opaque.
+        raise TimeoutError(
+            f"Ontop did not open port {port} within {timeout}s. "
+            f"Last Ontop output:\n{self._read_ontop_log(tail=50)}"
+        )
 
     def _wait_for_port_free(self, port: int, timeout: float) -> None:
         deadline = time.time() + timeout
