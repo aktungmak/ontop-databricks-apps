@@ -77,10 +77,13 @@
 }
 
 .prefix-table-wrap .section-toggle {
-  display: flex;
-  align-items: center;
   gap: var(--space-xs);
   margin-bottom: var(--space-sm);
+}
+
+.section-toggle {
+  display: flex;
+  align-items: center;
   padding: 0;
   border: none;
   background: none;
@@ -89,13 +92,13 @@
   cursor: pointer;
 }
 
-.prefix-table-wrap .section-toggle:focus-visible {
+.section-toggle:focus-visible {
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px var(--ring);
 }
 
-.prefix-table-wrap .section-chevron {
+.section-chevron {
   width: 0;
   height: 0;
   border-top: 5px solid transparent;
@@ -104,7 +107,8 @@
   transition: transform 0.15s ease;
 }
 
-.prefix-table-wrap:not(.collapsed) .section-chevron {
+.prefix-table-wrap:not(.collapsed) .section-chevron,
+.triples-map-card:not(.collapsed) .section-chevron {
   transform: rotate(90deg);
 }
 
@@ -181,36 +185,10 @@
 }
 
 .triples-map-card .triples-map-toggle {
-  display: flex;
-  align-items: center;
   justify-content: center;
   flex-shrink: 0;
   width: 28px;
   height: 28px;
-  padding: 0;
-  border: none;
-  background: none;
-  color: inherit;
-  cursor: pointer;
-}
-
-.triples-map-card .triples-map-toggle:focus-visible {
-  outline: none;
-  border-radius: var(--radius-sm);
-  box-shadow: 0 0 0 2px var(--ring);
-}
-
-.triples-map-card .section-chevron {
-  width: 0;
-  height: 0;
-  border-top: 5px solid transparent;
-  border-bottom: 5px solid transparent;
-  border-left: 6px solid var(--muted-foreground);
-  transition: transform 0.15s ease;
-}
-
-.triples-map-card:not(.collapsed) .section-chevron {
-  transform: rotate(90deg);
 }
 
 .triples-map-card.collapsed .triples-map-body {
@@ -302,15 +280,17 @@
   line-height: 16px;
 }
 
-.uc-picker-row {
+.uc-picker {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-sm);
   align-items: flex-end;
+  margin-bottom: var(--space-sm);
 }
 
-.uc-picker-row select,
-.uc-picker-row input {
+.uc-picker .select {
+  flex: 1 1 140px;
+  width: auto;
   min-width: 140px;
 }
 
@@ -393,18 +373,4 @@
 [data-lt-tableName] input[data-field="tableName"],
 [data-lt-sqlQuery] textarea[data-field="sqlQuery"] {
   margin-top: var(--space-sm);
-}
-
-.uc-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  align-items: flex-end;
-  margin-bottom: var(--space-sm);
-}
-
-.uc-picker .select {
-  flex: 1 1 140px;
-  width: auto;
-  min-width: 140px;
 }

@@ -84,8 +84,8 @@
           <label><input type="radio" name="auto-mode" value="table" checked /> Single table</label>
           <label><input type="radio" name="auto-mode" value="schema" /> Entire schema</label>
         </fieldset>
-        <div class="uc-picker-row" id="auto-uc-pickers"></div>
-        <div id="auto-progress" style="display:none">
+        <div class="uc-picker" id="auto-uc-pickers"></div>
+        <div id="auto-progress" class="hidden">
           <p id="auto-status-text">Starting…</p>
           <div class="progress progress-bar">
             <div class="progress-fill progress-bar-fill" id="auto-progress-fill" style="width:0%"></div>
@@ -96,7 +96,7 @@
       <div class="dialog-footer">
         <button type="button" class="btn btn-outline" data-close>Cancel</button>
         <button type="button" id="btn-auto-start" class="btn btn-primary">Generate</button>
-        <button type="button" id="btn-auto-retry" style="display:none" class="btn btn-outline">Retry failed</button>
+        <button type="button" id="btn-auto-retry" class="btn btn-outline hidden">Retry failed</button>
       </div>
     </div>
   </dialog>
