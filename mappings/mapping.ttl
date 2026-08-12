@@ -2,6 +2,67 @@
 @prefix ex: <http://example.org/tpch/> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
+<#Region> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.region" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/region/{r_regionkey}" ;
+    rr:class ex:Region
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:regionKey ;
+    rr:objectMap [
+      rr:column "r_regionkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:name ;
+    rr:objectMap [ rr:column "r_name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "r_comment" ]
+  ] .
+
+<#Nation> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.nation" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/nation/{n_nationkey}" ;
+    rr:class ex:Nation
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:nationKey ;
+    rr:objectMap [
+      rr:column "n_nationkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:name ;
+    rr:objectMap [ rr:column "n_name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:regionKey ;
+    rr:objectMap [
+      rr:column "n_regionkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "n_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:inRegion ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Region> ;
+      rr:joinCondition [
+        rr:child "n_regionkey" ;
+        rr:parent "r_regionkey"
+      ]
+    ]
+  ] .
+
 <#Customer> a rr:TriplesMap ;
   rr:logicalTable [ rr:tableName "samples.tpch.customer" ] ;
   rr:subjectMap [
@@ -48,6 +109,181 @@
   rr:predicateObjectMap [
     rr:predicate ex:comment ;
     rr:objectMap [ rr:column "c_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:customerInNation ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Nation> ;
+      rr:joinCondition [
+        rr:child "c_nationkey" ;
+        rr:parent "n_nationkey"
+      ]
+    ]
+  ] .
+
+<#Supplier> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.supplier" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/supplier/{s_suppkey}" ;
+    rr:class ex:Supplier
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:supplierKey ;
+    rr:objectMap [
+      rr:column "s_suppkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:name ;
+    rr:objectMap [ rr:column "s_name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:address ;
+    rr:objectMap [ rr:column "s_address" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:nationKey ;
+    rr:objectMap [
+      rr:column "s_nationkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:phone ;
+    rr:objectMap [ rr:column "s_phone" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:accountBalance ;
+    rr:objectMap [
+      rr:column "s_acctbal" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "s_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:supplierInNation ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Nation> ;
+      rr:joinCondition [
+        rr:child "s_nationkey" ;
+        rr:parent "n_nationkey"
+      ]
+    ]
+  ] .
+
+<#Part> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.part" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/part/{p_partkey}" ;
+    rr:class ex:Part
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:partKey ;
+    rr:objectMap [
+      rr:column "p_partkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:name ;
+    rr:objectMap [ rr:column "p_name" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:manufacturer ;
+    rr:objectMap [ rr:column "p_mfgr" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:brand ;
+    rr:objectMap [ rr:column "p_brand" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:partType ;
+    rr:objectMap [ rr:column "p_type" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:size ;
+    rr:objectMap [
+      rr:column "p_size" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:container ;
+    rr:objectMap [ rr:column "p_container" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:retailPrice ;
+    rr:objectMap [
+      rr:column "p_retailprice" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "p_comment" ]
+  ] .
+
+<#PartSupp> a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "samples.tpch.partsupp" ] ;
+  rr:subjectMap [
+    rr:template "http://example.org/tpch/partsupp/{ps_partkey}/{ps_suppkey}" ;
+    rr:class ex:PartSupp
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:partKey ;
+    rr:objectMap [
+      rr:column "ps_partkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:supplierKey ;
+    rr:objectMap [
+      rr:column "ps_suppkey" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:availableQuantity ;
+    rr:objectMap [
+      rr:column "ps_availqty" ;
+      rr:datatype xsd:integer
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:supplyCost ;
+    rr:objectMap [
+      rr:column "ps_supplycost" ;
+      rr:datatype xsd:decimal
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:comment ;
+    rr:objectMap [ rr:column "ps_comment" ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:forPart ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Part> ;
+      rr:joinCondition [
+        rr:child "ps_partkey" ;
+        rr:parent "p_partkey"
+      ]
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:bySupplier ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Supplier> ;
+      rr:joinCondition [
+        rr:child "ps_suppkey" ;
+        rr:parent "s_suppkey"
+      ]
+    ]
   ] .
 
 <#Order> a rr:TriplesMap ;
@@ -214,6 +450,26 @@
       rr:joinCondition [
         rr:child "l_orderkey" ;
         rr:parent "o_orderkey"
+      ]
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:ofPart ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Part> ;
+      rr:joinCondition [
+        rr:child "l_partkey" ;
+        rr:parent "p_partkey"
+      ]
+    ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ex:lineSuppliedBy ;
+    rr:objectMap [
+      rr:parentTriplesMap <#Supplier> ;
+      rr:joinCondition [
+        rr:child "l_suppkey" ;
+        rr:parent "s_suppkey"
       ]
     ]
   ] .

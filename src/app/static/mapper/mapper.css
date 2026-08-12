@@ -47,7 +47,10 @@
   display: none;
 }
 
-#visual-editor-panel > .btn {
+.visual-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
 }
 
@@ -74,10 +77,13 @@
 }
 
 .prefix-table-wrap .section-toggle {
-  display: flex;
-  align-items: center;
   gap: var(--space-xs);
   margin-bottom: var(--space-sm);
+}
+
+.section-toggle {
+  display: flex;
+  align-items: center;
   padding: 0;
   border: none;
   background: none;
@@ -86,13 +92,13 @@
   cursor: pointer;
 }
 
-.prefix-table-wrap .section-toggle:focus-visible {
+.section-toggle:focus-visible {
   outline: none;
   border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px var(--ring);
 }
 
-.prefix-table-wrap .section-chevron {
+.section-chevron {
   width: 0;
   height: 0;
   border-top: 5px solid transparent;
@@ -101,7 +107,8 @@
   transition: transform 0.15s ease;
 }
 
-.prefix-table-wrap:not(.collapsed) .section-chevron {
+.prefix-table-wrap:not(.collapsed) .section-chevron,
+.triples-map-card:not(.collapsed) .section-chevron {
   transform: rotate(90deg);
 }
 
@@ -173,6 +180,21 @@
   margin-bottom: var(--space-md);
 }
 
+.triples-map-card.collapsed header {
+  margin-bottom: 0;
+}
+
+.triples-map-card .triples-map-toggle {
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+}
+
+.triples-map-card.collapsed .triples-map-body {
+  display: none;
+}
+
 .triples-map-card header h3 {
   display: flex;
   flex-wrap: wrap;
@@ -181,6 +203,13 @@
   flex: 1;
   font-size: 15px;
   line-height: 20px;
+}
+
+.triples-map-card header h3 .triples-map-id-input {
+  flex: 1;
+  min-width: 260px;
+  max-width: 480px;
+  font-size: 13px;
 }
 
 .triples-map-card h4 {
@@ -251,15 +280,17 @@
   line-height: 16px;
 }
 
-.uc-picker-row {
+.uc-picker {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-sm);
   align-items: flex-end;
+  margin-bottom: var(--space-sm);
 }
 
-.uc-picker-row select,
-.uc-picker-row input {
+.uc-picker .select {
+  flex: 1 1 140px;
+  width: auto;
   min-width: 140px;
 }
 
@@ -342,18 +373,4 @@
 [data-lt-tableName] input[data-field="tableName"],
 [data-lt-sqlQuery] textarea[data-field="sqlQuery"] {
   margin-top: var(--space-sm);
-}
-
-.uc-picker {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-sm);
-  align-items: flex-end;
-  margin-bottom: var(--space-sm);
-}
-
-.uc-picker .select {
-  flex: 1 1 140px;
-  width: auto;
-  min-width: 140px;
 }

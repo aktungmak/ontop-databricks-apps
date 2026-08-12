@@ -41,7 +41,7 @@ const state = {
   codeMirror: null,
   ontologies: [],
   ontologyIndex: { classes: [], properties: [] },
-  ucCache: { catalogs: null },
+  ucCache: { catalogs: null, columns: {} },
   autogenErrors: [],
 };
 
@@ -55,6 +55,7 @@ const prefixTbody = $('#prefix-tbody');
 const ontologyList = $('#ontology-list');
 const autogenDialog = $('#dialog-autogenerate');
 const PREFIX_COLLAPSED_KEY = 'mapper-prefixes-collapsed';
+const collapsedTriplesMaps = new Set();
 
 function fingerprint() {
   const quads = state.store.getQuads(null, null, null, null);
@@ -73,17 +74,19 @@ function markClean() {
   state.dirty = false;
 }
 
-async function getTurtleFromStore() {
+async function getCurrentTurtle() {
+  if (state.mode === 'text' && state.codeMirror) return state.codeMirror.getValue();
   return serializeStore(state.store, state.prefixes);
 }
 
+async function syncUiFromStore() {
+  renderPrefixTable();
+  if (state.mode === 'visual') renderVisualEditor();
+  else if (state.codeMirror) state.codeMirror.setValue(await serializeStore(state.store, state.prefixes));
+}
+
 async function persistDraft() {
-  let turtle;
-  if (state.mode === 'text' && state.codeMirror) {
-    turtle = state.codeMirror.getValue();
-  } else {
-    turtle = await getTurtleFromStore();
-  }
+  const turtle = await getCurrentTurtle();
   await saveDraft(turtle, state.prefixes, state.mode);
   markClean();
 }
@@ -91,9 +94,7 @@ async function persistDraft() {
 async function loadTurtleIntoState(turtle) {
   state.prefixes = mergePrefixes(state.prefixes, extractPrefixes(turtle));
   state.store = parseTurtle(turtle, state.prefixes);
-  renderPrefixTable();
-  if (state.mode === 'visual') renderVisualEditor();
-  else if (state.codeMirror) state.codeMirror.setValue(await serializeStore(state.store, state.prefixes));
+  await syncUiFromStore();
 }
 
 async function restoreDraft() {
@@ -109,7 +110,7 @@ async function switchMode(newMode) {
   if (newMode === state.mode) return;
 
   if (state.mode === 'visual' && newMode === 'text') {
-    const turtle = await getTurtleFromStore();
+    const turtle = await getCurrentTurtle();
     if (state.codeMirror) state.codeMirror.setValue(turtle);
   } else if (state.mode === 'text' && newMode === 'visual') {
     const turtle = state.codeMirror?.getValue() || '';
@@ -248,30 +249,44 @@ async function fetchJson(url) {
   return text ? JSON.parse(text) : null;
 }
 
+async function fetchList(url, key) {
+  const data = await fetchJson(url);
+  return data[key] || data;
+}
+
+function fillSelect(sel, items, placeholder, selected) {
+  sel.innerHTML = `<option value="">${placeholder}</option>`;
+  items.forEach((item) => {
+    const opt = document.createElement('option');
+    opt.value = item;
+    opt.textContent = item;
+    if (item === selected) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
 async function loadCatalogs() {
   if (state.ucCache.catalogs) return state.ucCache.catalogs;
-  const data = await fetchJson('/api/uc/catalogs');
-  state.ucCache.catalogs = data.catalogs || data;
+  state.ucCache.catalogs = await fetchList('/api/uc/catalogs', 'catalogs');
   return state.ucCache.catalogs;
 }
 
 async function loadSchemas(catalog) {
-  const data = await fetchJson(`/api/uc/schemas?catalog=${encodeURIComponent(catalog)}`);
-  return data.schemas || data;
+  return fetchList(`/api/uc/schemas?catalog=${encodeURIComponent(catalog)}`, 'schemas');
 }
 
 async function loadTables(catalog, schema) {
-  const data = await fetchJson(
+  return fetchList(
     `/api/uc/tables?catalog=${encodeURIComponent(catalog)}&schema=${encodeURIComponent(schema)}`,
+    'tables',
   );
-  return data.tables || data;
 }
 
 async function loadColumns(catalog, schema, table) {
-  const data = await fetchJson(
+  return fetchList(
     `/api/uc/columns?catalog=${encodeURIComponent(catalog)}&schema=${encodeURIComponent(schema)}&table=${encodeURIComponent(table)}`,
+    'columns',
   );
-  return data.columns || data;
 }
 
 function parseTableName(fullName) {
@@ -350,16 +365,15 @@ async function ensureColumnsCached(getTableName) {
   const p = parseTableName(getTableName());
   if (!p.catalog || !p.schema || !p.table) return [];
   const key = `${p.catalog}.${p.schema}.${p.table}`;
-  if (!state._colCache) state._colCache = {};
-  if (!state._colCache[key]) {
+  if (!state.ucCache.columns[key]) {
     try {
       const cols = await loadColumns(p.catalog, p.schema, p.table);
-      state._colCache[key] = cols.map((c) => c.name);
+      state.ucCache.columns[key] = cols.map((c) => c.name);
     } catch {
-      state._colCache[key] = [];
+      state.ucCache.columns[key] = [];
     }
   }
-  return state._colCache[key];
+  return state.ucCache.columns[key];
 }
 
 function insertAtCursor(input, text) {
@@ -393,6 +407,13 @@ function setupColumnInsertSelect(select, getTableName, onInsert) {
   });
 }
 
+function wireTemplateColumnInsert(select, templateInput, getTableName, onAfterInsert) {
+  setupColumnInsertSelect(select, getTableName, (token) => {
+    insertAtCursor(templateInput, token);
+    onAfterInsert();
+  });
+}
+
 function classOptions() {
   const active = state.ontologies.some((o) => o.active);
   if (!active) return [];
@@ -419,13 +440,7 @@ function createUcPicker(container, initial = {}, onChange) {
   async function populateCatalogs() {
     try {
       const catalogs = await loadCatalogs();
-      selCatalog.innerHTML = '<option value="">Catalog…</option>';
-      catalogs.forEach((c) => {
-        const opt = document.createElement('option');
-        opt.value = c; opt.textContent = c;
-        if (c === picker.catalog) opt.selected = true;
-        selCatalog.appendChild(opt);
-      });
+      fillSelect(selCatalog, catalogs, 'Catalog…', picker.catalog);
     } catch (e) {
       selCatalog.innerHTML = '<option value="">Catalog unavailable</option>';
       const errOpt = document.createElement('option');
@@ -437,30 +452,24 @@ function createUcPicker(container, initial = {}, onChange) {
   }
 
   async function populateSchemas() {
-    selSchema.innerHTML = '<option value="">Schema…</option>';
     selSchema.disabled = !picker.catalog;
-    if (!picker.catalog) return;
+    if (!picker.catalog) {
+      fillSelect(selSchema, [], 'Schema…', '');
+      return;
+    }
     const schemas = await loadSchemas(picker.catalog);
-    schemas.forEach((s) => {
-      const opt = document.createElement('option');
-      opt.value = s; opt.textContent = s;
-      if (s === picker.schema) opt.selected = true;
-      selSchema.appendChild(opt);
-    });
+    fillSelect(selSchema, schemas, 'Schema…', picker.schema);
     selSchema.disabled = false;
   }
 
   async function populateTables() {
-    selTable.innerHTML = '<option value="">Table…</option>';
     selTable.disabled = !picker.schema;
-    if (!picker.catalog || !picker.schema) return;
+    if (!picker.catalog || !picker.schema) {
+      fillSelect(selTable, [], 'Table…', '');
+      return;
+    }
     const tables = await loadTables(picker.catalog, picker.schema);
-    tables.forEach((t) => {
-      const opt = document.createElement('option');
-      opt.value = t; opt.textContent = t;
-      if (t === picker.table) opt.selected = true;
-      selTable.appendChild(opt);
-    });
+    fillSelect(selTable, tables, 'Table…', picker.table);
     selTable.disabled = false;
   }
 
@@ -469,7 +478,7 @@ function createUcPicker(container, initial = {}, onChange) {
     picker.schema = '';
     picker.table = '';
     await populateSchemas();
-    selTable.innerHTML = '<option value="">Table…</option>';
+    fillSelect(selTable, [], 'Table…', '');
     selTable.disabled = true;
     onChange?.(picker);
   });
@@ -505,29 +514,43 @@ function setupColumnAutocomplete(input, getTableName) {
     () => {
       const p = parseTableName(getTableName());
       const key = `${p.catalog}.${p.schema}.${p.table}`;
-      return state._colCache?.[key] || [];
+      return state.ucCache.columns[key] || [];
     },
     { prepare: () => ensureColumnsCached(getTableName) },
   );
 }
 
-function setupOntologyAutocomplete(input, getOptions) {
-  if (!input) return;
-  attachAutocomplete(input, getOptions);
-}
-
-function setupDatatypeCombobox(input) {
-  if (!input) return;
-  attachAutocomplete(input, () => XSD_DATATYPES);
-}
-
-function setupParentMapAutocomplete(input, getFragmentIds) {
-  if (!input) return;
-  attachAutocomplete(input, getFragmentIds);
+function resetColumnInsertSelects(root) {
+  root.querySelectorAll('.column-insert-select').forEach((sel) => {
+    sel.innerHTML = '<option value="">+ column…</option>';
+  });
 }
 
 function tableNameFromCard(card) {
   return card?.logicalTable?.type === 'tableName' ? card.logicalTable.value : '';
+}
+
+function tableNameForTriplesMap(cardId) {
+  const card = parseTriplesMaps(state.store).find((c) => c.id === cardId);
+  return tableNameFromCard(card);
+}
+
+function updateFoldAllButton(cards) {
+  const btn = $('#btn-fold-all-maps');
+  if (!btn) return;
+  const allCollapsed = cards.length > 0 && cards.every((card) => collapsedTriplesMaps.has(card.id));
+  btn.textContent = allCollapsed ? 'Unfold all' : 'Fold all';
+  btn.disabled = cards.length === 0;
+}
+
+function setAllTriplesMapsCollapsed(collapsed) {
+  const cards = parseTriplesMaps(state.store);
+  if (collapsed) {
+    cards.forEach((card) => collapsedTriplesMaps.add(card.id));
+  } else {
+    cards.forEach((card) => collapsedTriplesMaps.delete(card.id));
+  }
+  renderVisualEditor();
 }
 
 function renderVisualEditor() {
@@ -536,57 +559,59 @@ function renderVisualEditor() {
   cards.forEach((card) => {
     visualCards.appendChild(renderTriplesMapCard(card, cards));
   });
-}
-
-function logicalTableUiType(logicalTable) {
-  if (logicalTable.type === 'sqlQuery') return 'sqlQuery';
-  return 'tableName';
+  updateFoldAllButton(cards);
 }
 
 function renderTriplesMapCard(card, cards) {
   const article = document.createElement('article');
-  article.className = 'triples-map-card card';
-  const ltType = logicalTableUiType(card.logicalTable);
+  const isCollapsed = collapsedTriplesMaps.has(card.id);
+  article.className = `triples-map-card card${isCollapsed ? ' collapsed' : ''}`;
+  const ltType = card.logicalTable.type === 'sqlQuery' ? 'sqlQuery' : 'tableName';
   const parsed = parseTableName(card.logicalTable.value);
   const isTableName = ltType === 'tableName';
 
   article.innerHTML = `
     <header>
-      <h3>Triples Map: <input type="text" class="input" value="${esc(card.id)}" data-field="id" style="width:120px" /></h3>
+      <button type="button" class="section-toggle triples-map-toggle" data-toggle-map aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? 'Expand' : 'Collapse'} triples map">
+        <span class="section-chevron" aria-hidden="true"></span>
+      </button>
+      <h3>Triples Map: <input type="text" class="input triples-map-id-input" value="${esc(card.id)}" data-field="id" /></h3>
       <button type="button" class="btn btn-outline" data-remove-map>Remove</button>
     </header>
-    ${card.hasStubs ? '<div class="stub-card alert alert-warning">Contains unsupported constructs — preserved in Text Editor</div>' : ''}
-    <div class="field-row">
-      <label>Logical table</label>
-      <select class="select" data-field="lt-type">
-        <option value="tableName" ${ltType === 'tableName' ? 'selected' : ''}>tableName</option>
-        <option value="sqlQuery" ${ltType === 'sqlQuery' ? 'selected' : ''}>SQLQuery</option>
-      </select>
-    </div>
-    <div data-lt-tableName class="${ltType === 'tableName' ? '' : 'hidden'}">
+    <div class="triples-map-body">
+      ${card.hasStubs ? '<div class="stub-card alert alert-warning">Contains unsupported constructs — preserved in Text Editor</div>' : ''}
       <div class="field-row">
-        <label>Table</label>
-        <div class="uc-picker" data-uc-container></div>
-      </div>
-      <input type="text" class="input" placeholder="catalog.schema.table" value="${esc(card.logicalTable.value)}" data-field="tableName" />
-    </div>
-    <div data-lt-sqlQuery class="${ltType === 'sqlQuery' ? '' : 'hidden'}">
-      <textarea class="input" data-field="sqlQuery" rows="4">${esc(card.logicalTable.value)}</textarea>
-    </div>
-    <h4>Subject map</h4>
-    <div class="field-row">
-      <label>Template</label>
-      <div class="template-input-row">
-        <input type="text" class="input" value="${esc(card.subjectMap.template)}" data-field="sm-template" placeholder="http://example.org/{id}" />
-        <select data-sm-template-columns class="select column-insert-select" ${isTableName ? '' : 'disabled'} title="Insert column placeholder">
-          <option value="">+ column…</option>
+        <label>Logical table</label>
+        <select class="select" data-field="lt-type">
+          <option value="tableName" ${ltType === 'tableName' ? 'selected' : ''}>tableName</option>
+          <option value="sqlQuery" ${ltType === 'sqlQuery' ? 'selected' : ''}>SQLQuery</option>
         </select>
       </div>
+      <div data-lt-tableName class="${ltType === 'tableName' ? '' : 'hidden'}">
+        <div class="field-row">
+          <label>Table</label>
+          <div class="uc-picker" data-uc-container></div>
+        </div>
+        <input type="text" class="input" placeholder="catalog.schema.table" value="${esc(card.logicalTable.value)}" data-field="tableName" />
+      </div>
+      <div data-lt-sqlQuery class="${ltType === 'sqlQuery' ? '' : 'hidden'}">
+        <textarea class="input" data-field="sqlQuery" rows="4">${esc(card.logicalTable.value)}</textarea>
+      </div>
+      <h4>Subject map</h4>
+      <div class="field-row">
+        <label>Template</label>
+        <div class="template-input-row">
+          <input type="text" class="input" value="${esc(card.subjectMap.template)}" data-field="sm-template" placeholder="http://example.org/{id}" />
+          <select data-sm-template-columns class="select column-insert-select" ${isTableName ? '' : 'disabled'} title="Insert column placeholder">
+            <option value="">+ column…</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row"><label>Class</label><input type="text" class="input" value="${esc(card.subjectMap.class)}" data-field="sm-class" /></div>
+      <h4>Predicate-object maps</h4>
+      <div data-pom-container></div>
+      <button type="button" class="btn btn-outline" data-add-pom>New predicate-object map</button>
     </div>
-    <div class="field-row"><label>Class</label><input type="text" class="input" value="${esc(card.subjectMap.class)}" data-field="sm-class" /></div>
-    <h4>Predicate-object maps</h4>
-    <div data-pom-container></div>
-    <button type="button" class="btn btn-outline" data-add-pom>New predicate-object map</button>
   `;
 
   const ucPicker = createUcPicker(article.querySelector('[data-uc-container]'), parsed, () => {
@@ -594,8 +619,13 @@ function renderTriplesMapCard(card, cards) {
     if (full) {
       article.querySelector('[data-field="tableName"]').value = full;
       updateLogicalTable(state.store, card.id, { type: 'tableName', value: full });
+      resetColumnInsertSelects(article);
       if (!card.id || card.id === '#NewMap') {
         const newId = tableToFragmentId(full);
+        if (collapsedTriplesMaps.has(card.id)) {
+          collapsedTriplesMaps.delete(card.id);
+          collapsedTriplesMaps.add(newId);
+        }
         renameTriplesMap(state.store, card.id, newId);
         renderVisualEditor();
       }
@@ -615,16 +645,36 @@ function renderTriplesMapCard(card, cards) {
   });
   article.querySelector('[data-field="tableName"]').addEventListener('change', (e) => {
     updateLogicalTable(state.store, card.id, { type: 'tableName', value: e.target.value });
+    resetColumnInsertSelects(article);
     markDirty();
   });
   article.querySelector('[data-field="sqlQuery"]').addEventListener('change', (e) => {
     updateLogicalTable(state.store, card.id, { type: 'sqlQuery', value: e.target.value });
     markDirty();
   });
+  article.querySelector('[data-toggle-map]').addEventListener('click', () => {
+    if (collapsedTriplesMaps.has(card.id)) collapsedTriplesMaps.delete(card.id);
+    else collapsedTriplesMaps.add(card.id);
+    const collapsed = collapsedTriplesMaps.has(card.id);
+    article.classList.toggle('collapsed', collapsed);
+    article.querySelector('[data-toggle-map]').setAttribute(
+      'aria-expanded',
+      String(!collapsed),
+    );
+    article.querySelector('[data-toggle-map]').setAttribute(
+      'aria-label',
+      `${collapsed ? 'Expand' : 'Collapse'} triples map`,
+    );
+    updateFoldAllButton(parseTriplesMaps(state.store));
+  });
   article.querySelector('[data-field="id"]').addEventListener('change', (e) => {
     const oldId = card.id;
     let newId = e.target.value.trim();
     if (!newId.startsWith('#')) newId = `#${newId}`;
+    if (collapsedTriplesMaps.has(oldId)) {
+      collapsedTriplesMaps.delete(oldId);
+      collapsedTriplesMaps.add(newId);
+    }
     renameTriplesMap(state.store, oldId, newId);
     renderVisualEditor();
     markDirty();
@@ -640,22 +690,24 @@ function renderTriplesMapCard(card, cards) {
     markDirty();
   });
 
+  const getTableName = () => tableNameForTriplesMap(card.id);
+
   if (isTableName) {
-    setupColumnInsertSelect(
+    wireTemplateColumnInsert(
       article.querySelector('[data-sm-template-columns]'),
-      () => card.logicalTable.value,
-      (token) => {
-        insertAtCursor(smTemplateInput, token);
+      smTemplateInput,
+      getTableName,
+      () => {
         updateSubjectMap(state.store, card.id, { ...card.subjectMap, template: smTemplateInput.value }, state.prefixes);
         markDirty();
       },
     );
   }
-  setupOntologyAutocomplete(smClassInput, classOptions);
+  attachAutocomplete(smClassInput, classOptions);
 
   const pomContainer = article.querySelector('[data-pom-container]');
   (card.predicateObjectMaps || []).forEach((pom, pomIdx) => {
-    pomContainer.appendChild(renderPomCard(card, pom, pomIdx, isTableName, cards));
+    pomContainer.appendChild(renderPomCard(card, pom, pomIdx, isTableName, cards, getTableName));
   });
 
   article.querySelector('[data-add-pom]').addEventListener('click', () => {
@@ -665,6 +717,7 @@ function renderTriplesMapCard(card, cards) {
   });
   article.querySelector('[data-remove-map]').addEventListener('click', () => {
     if (!confirm('Remove this triples map?')) return;
+    collapsedTriplesMaps.delete(card.id);
     removeTriplesMap(state.store, card.id);
     renderVisualEditor();
     markDirty();
@@ -673,7 +726,7 @@ function renderTriplesMapCard(card, cards) {
   return article;
 }
 
-function renderPomCard(card, pom, pomIdx, isTableName, cards) {
+function renderPomCard(card, pom, pomIdx, isTableName, cards, getTableName) {
   const div = document.createElement('div');
   div.className = 'pom-section';
 
@@ -764,6 +817,11 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
     };
   }
 
+  function commitPom(next) {
+    updatePredicateObjectMap(state.store, card.id, pomIdx, next, state.prefixes);
+    markDirty();
+  }
+
   const showOm = (type) => {
     const objectMap = { type };
     if (type === 'column') objectMap.column = '';
@@ -782,63 +840,42 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
   };
 
   const datatypeInput = div.querySelector('[data-om-datatype]');
-  setupDatatypeCombobox(datatypeInput);
-  datatypeInput?.addEventListener('change', () => {
-    const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, current, state.prefixes);
-    markDirty();
-  });
+  attachAutocomplete(datatypeInput, () => XSD_DATATYPES);
+  datatypeInput?.addEventListener('change', () => commitPom(currentPomFromDom()));
 
   div.querySelector('[data-pom-om-type]').addEventListener('change', (e) => showOm(e.target.value));
   pomPredicateInput?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: e.target.value,
-      objectMap: current.objectMap,
-    }, state.prefixes);
-    markDirty();
+    commitPom({ predicate: e.target.value, objectMap: current.objectMap });
   });
-  setupOntologyAutocomplete(pomPredicateInput, propertyOptions);
+  attachAutocomplete(pomPredicateInput, propertyOptions);
   const omColumnInput = div.querySelector('input[data-om-column]');
   omColumnInput?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: current.predicate,
-      objectMap: { ...current.objectMap, column: e.target.value },
-    }, state.prefixes);
-    markDirty();
+    commitPom({ predicate: current.predicate, objectMap: { ...current.objectMap, column: e.target.value } });
   });
   const omTemplateInput = div.querySelector('input[data-om-template]');
   omTemplateInput?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: current.predicate,
-      objectMap: { ...current.objectMap, template: e.target.value },
-    }, state.prefixes);
-    markDirty();
+    commitPom({ predicate: current.predicate, objectMap: { ...current.objectMap, template: e.target.value } });
   });
   div.querySelector('input[data-om-constant]')?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: current.predicate,
-      objectMap: { ...current.objectMap, constant: e.target.value },
-    }, state.prefixes);
-    markDirty();
+    commitPom({ predicate: current.predicate, objectMap: { ...current.objectMap, constant: e.target.value } });
   });
 
   if (isTableName) {
-    setupColumnAutocomplete(omColumnInput, () => card.logicalTable.value);
-    setupColumnInsertSelect(
+    setupColumnAutocomplete(omColumnInput, getTableName);
+    wireTemplateColumnInsert(
       div.querySelector('[data-om-template-columns]'),
-      () => card.logicalTable.value,
-      (token) => {
-        insertAtCursor(omTemplateInput, token);
+      omTemplateInput,
+      getTableName,
+      () => {
         const current = currentPomFromDom();
-        updatePredicateObjectMap(state.store, card.id, pomIdx, {
+        commitPom({
           predicate: current.predicate,
           objectMap: { ...current.objectMap, template: omTemplateInput.value },
-        }, state.prefixes);
-        markDirty();
+        });
       },
     );
   }
@@ -847,17 +884,16 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
   const childColumnInput = div.querySelector('[data-om-jc-child]');
   const parentColumnInput = div.querySelector('[data-om-jc-parent]');
 
-  setupParentMapAutocomplete(parentMapInput, () => parentMapIds);
+  attachAutocomplete(parentMapInput, () => parentMapIds);
 
   const resolveParentTableName = () => {
     const parentId = parentMapInput?.value || pom.objectMap.parentTriplesMap || '';
-    const parentCard = cards.find((c) => c.id === parentId);
-    return tableNameFromCard(parentCard);
+    return tableNameForTriplesMap(parentId);
   };
 
   if (omType === 'parentJoin') {
     if (isTableName) {
-      setupColumnAutocomplete(childColumnInput, () => card.logicalTable.value);
+      setupColumnAutocomplete(childColumnInput, getTableName);
     }
     setupColumnAutocomplete(parentColumnInput, resolveParentTableName);
   }
@@ -881,36 +917,30 @@ function renderPomCard(card, pom, pomIdx, isTableName, cards) {
 
   parentMapInput?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
-      predicate: current.predicate,
-      objectMap: { ...current.objectMap, parentTriplesMap: e.target.value },
-    }, state.prefixes);
+    commitPom({ predicate: current.predicate, objectMap: { ...current.objectMap, parentTriplesMap: e.target.value } });
     updateParentWarning();
-    markDirty();
   });
   div.querySelector('[data-om-jc-child]')?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
+    commitPom({
       predicate: current.predicate,
       objectMap: {
         ...current.objectMap,
         joinCondition: { ...current.objectMap.joinCondition, child: e.target.value },
       },
-    }, state.prefixes);
+    });
     updateJoinWarning();
-    markDirty();
   });
   div.querySelector('[data-om-jc-parent]')?.addEventListener('change', (e) => {
     const current = currentPomFromDom();
-    updatePredicateObjectMap(state.store, card.id, pomIdx, {
+    commitPom({
       predicate: current.predicate,
       objectMap: {
         ...current.objectMap,
         joinCondition: { ...current.objectMap.joinCondition, parent: e.target.value },
       },
-    }, state.prefixes);
+    });
     updateJoinWarning();
-    markDirty();
   });
   updateParentWarning();
   updateJoinWarning();
@@ -947,9 +977,7 @@ function uploadFile(file) {
 }
 
 async function downloadMapping() {
-  let turtle;
-  if (state.mode === 'text' && state.codeMirror) turtle = state.codeMirror.getValue();
-  else turtle = await getTurtleFromStore();
+  const turtle = await getCurrentTurtle();
   const filename = prompt('Download filename:', 'mapping.ttl');
   if (!filename) return;
   const a = document.createElement('a');
@@ -964,9 +992,7 @@ async function clearDraftAction() {
   await clearDraft();
   state.prefixes = { ...DEFAULT_PREFIXES };
   state.store = parseTurtle('', state.prefixes);
-  renderPrefixTable();
-  if (state.mode === 'visual') renderVisualEditor();
-  else if (state.codeMirror) state.codeMirror.setValue('');
+  await syncUiFromStore();
   markClean();
 }
 
@@ -976,8 +1002,8 @@ let autogenPollTimer = null;
 function showAutogenDialog() {
   autogenDialog.showModal();
   autogenUcPicker = createUcPicker($('#auto-uc-pickers'), {});
-  $('#auto-progress').style.display = 'none';
-  $('#btn-auto-retry').style.display = 'none';
+  $('#auto-progress').classList.add('hidden');
+  $('#btn-auto-retry').classList.add('hidden');
   state.autogenErrors = [];
 }
 
@@ -987,9 +1013,7 @@ async function submitAutogenerate(retryOnly = false) {
   if (!picker.catalog || !picker.schema) { alert('Select catalog and schema'); return; }
   if (mode === 'table' && !picker.table) { alert('Select a table'); return; }
 
-  const mappingTurtle = state.mode === 'text' && state.codeMirror
-    ? state.codeMirror.getValue()
-    : await getTurtleFromStore();
+  const mappingTurtle = await getCurrentTurtle();
 
   let ontologyTurtle = '';
   for (const ont of state.ontologies.filter((o) => o.active)) {
@@ -1007,7 +1031,7 @@ async function submitAutogenerate(retryOnly = false) {
     retryErrors: retryOnly ? state.autogenErrors : null,
   };
 
-  $('#auto-progress').style.display = 'block';
+  $('#auto-progress').classList.remove('hidden');
   $('#auto-status-text').textContent = 'Submitting…';
 
   try {
@@ -1053,16 +1077,14 @@ function pollAutogenerate(jobId) {
             validateTurtle(status.turtle, state.prefixes);
             state.prefixes = mergePrefixes(state.prefixes, extractPrefixes(status.turtle));
             mergeTurtleIntoStore(state.store, status.turtle, state.prefixes);
-            renderPrefixTable();
-            if (state.mode === 'visual') renderVisualEditor();
-            else if (state.codeMirror) state.codeMirror.setValue(await serializeStore(state.store, state.prefixes));
+            await syncUiFromStore();
             markDirty();
             await persistDraft();
           } catch (e) {
             $('#auto-status-text').textContent = `Merge failed: ${e.message}`;
           }
         }
-        if (status.errors?.length) $('#btn-auto-retry').style.display = '';
+        if (status.errors?.length) $('#btn-auto-retry').classList.remove('hidden');
       }
     } catch (e) {
       clearInterval(autogenPollTimer);
@@ -1135,8 +1157,7 @@ async function init() {
   await refreshOntologyList();
   await refreshOntologyIndex();
 
-  if (state.mode === 'visual') renderVisualEditor();
-  else if (state.codeMirror) state.codeMirror.setValue(await serializeStore(state.store, state.prefixes));
+  await syncUiFromStore();
 
   markClean();
 
@@ -1147,6 +1168,12 @@ async function init() {
     addTriplesMap(state.store, newEmptyCard(), state.prefixes);
     renderVisualEditor();
     markDirty();
+  });
+  $('#btn-fold-all-maps').addEventListener('click', () => {
+    const cards = parseTriplesMaps(state.store);
+    if (!cards.length) return;
+    const allCollapsed = cards.every((card) => collapsedTriplesMaps.has(card.id));
+    setAllTriplesMapsCollapsed(!allCollapsed);
   });
   $('#btn-load-live').addEventListener('click', loadLiveMapping);
   $('#input-upload').addEventListener('change', (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]); e.target.value = ''; });
