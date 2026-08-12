@@ -1,27 +1,56 @@
 @prefix ex: <http://example.org/tpch/> .
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix skos: <http://www.w3.org/2004/02/skos/core#> .
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 
 ex: a owl:Ontology ;
-  rdfs:label "TPC-H sample ontology" ;
-  rdfs:comment "Lightweight schema for the TPC-H customer, order, and line item VKG mapping." .
+  rdfs:label "Decision support ontology" ;
+  rdfs:comment "Ontology for the Decision support system at Acme Corporation." .
 
 ### Classes
 
 ex:Customer a owl:Class ;
   rdfs:label "Customer" ;
-  rdfs:comment "A TPC-H customer who places orders." .
+  skos:altLabel "Buyer", "Client", "Account" ;
+  rdfs:comment "An Acme customer who places orders." .
 
 ex:Order a owl:Class ;
   rdfs:label "Order" ;
+  skos:altLabel "Purchase order", "Sales order", "Transaction" ;
   rdfs:comment "A customer order consisting of one or more line items." .
 
 ex:LineItem a owl:Class ;
   rdfs:label "Line item" ;
-  rdfs:comment "A single line on an order." .
+  skos:altLabel "Order line", "Order detail", "Line" ;
+  rdfs:comment "A single line on an order, referencing a part and supplier." .
 
-### Object properties
+ex:Part a owl:Class ;
+  rdfs:label "Part" ;
+  skos:altLabel "Product", "Item", "SKU", "Article" ;
+  rdfs:comment "A product that can be ordered and stocked by suppliers." .
+
+ex:Supplier a owl:Class ;
+  rdfs:label "Supplier" ;
+  skos:altLabel "Vendor", "Provider", "Seller" ;
+  rdfs:comment "A vendor that supplies parts." .
+
+ex:PartSupp a owl:Class ;
+  rdfs:label "Part supply" ;
+  skos:altLabel "Part supplier", "Inventory", "Stock", "Availability" ;
+  rdfs:comment "Availability and cost of a part from a specific supplier." .
+
+ex:Nation a owl:Class ;
+  rdfs:label "Nation" ;
+  skos:altLabel "Country", "State" ;
+  rdfs:comment "A nation in which customers and suppliers are located." .
+
+ex:Region a owl:Class ;
+  rdfs:label "Region" ;
+  skos:altLabel "Area", "Territory", "Geography" ;
+  rdfs:comment "A geographic region containing one or more nations." .
+
+### Object properties — order / line item
 
 ex:placedBy a owl:ObjectProperty ;
   rdfs:label "placed by" ;
@@ -45,37 +74,180 @@ ex:hasLineItem a owl:ObjectProperty ;
   rdfs:domain ex:Order ;
   rdfs:range ex:LineItem .
 
-### Customer datatype properties
+### Object properties — part / supplier on line items
+
+ex:ofPart a owl:ObjectProperty ;
+  rdfs:label "of part" ;
+  rdfs:comment "The part referenced by a line item." ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range ex:Part ;
+  owl:inverseOf ex:orderedInLineItem .
+
+ex:orderedInLineItem a owl:ObjectProperty ;
+  rdfs:label "ordered in line item" ;
+  rdfs:domain ex:Part ;
+  rdfs:range ex:LineItem .
+
+ex:lineSuppliedBy a owl:ObjectProperty ;
+  rdfs:label "line supplied by" ;
+  rdfs:comment "The supplier fulfilling a line item." ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range ex:Supplier ;
+  owl:inverseOf ex:suppliesLineItem .
+
+ex:suppliesLineItem a owl:ObjectProperty ;
+  rdfs:label "supplies line item" ;
+  rdfs:domain ex:Supplier ;
+  rdfs:range ex:LineItem .
+
+### Object properties — part / supplier availability
+
+ex:forPart a owl:ObjectProperty ;
+  rdfs:label "for part" ;
+  rdfs:domain ex:PartSupp ;
+  rdfs:range ex:Part ;
+  owl:inverseOf ex:hasPartSupply .
+
+ex:hasPartSupply a owl:ObjectProperty ;
+  rdfs:label "has part supply" ;
+  rdfs:domain ex:Part ;
+  rdfs:range ex:PartSupp .
+
+ex:bySupplier a owl:ObjectProperty ;
+  rdfs:label "by supplier" ;
+  rdfs:domain ex:PartSupp ;
+  rdfs:range ex:Supplier ;
+  owl:inverseOf ex:hasSupplierSupply .
+
+ex:hasSupplierSupply a owl:ObjectProperty ;
+  rdfs:label "has supplier supply" ;
+  rdfs:domain ex:Supplier ;
+  rdfs:range ex:PartSupp .
+
+### Object properties — geography
+
+ex:customerInNation a owl:ObjectProperty ;
+  rdfs:label "customer in nation" ;
+  rdfs:domain ex:Customer ;
+  rdfs:range ex:Nation ;
+  owl:inverseOf ex:hasCustomer .
+
+ex:hasCustomer a owl:ObjectProperty ;
+  rdfs:label "has customer" ;
+  rdfs:domain ex:Nation ;
+  rdfs:range ex:Customer .
+
+ex:supplierInNation a owl:ObjectProperty ;
+  rdfs:label "supplier in nation" ;
+  rdfs:domain ex:Supplier ;
+  rdfs:range ex:Nation ;
+  owl:inverseOf ex:hasSupplier .
+
+ex:hasSupplier a owl:ObjectProperty ;
+  rdfs:label "has supplier" ;
+  rdfs:domain ex:Nation ;
+  rdfs:range ex:Supplier .
+
+ex:inRegion a owl:ObjectProperty ;
+  rdfs:label "in region" ;
+  rdfs:domain ex:Nation ;
+  rdfs:range ex:Region ;
+  owl:inverseOf ex:hasNation .
+
+ex:hasNation a owl:ObjectProperty ;
+  rdfs:label "has nation" ;
+  rdfs:domain ex:Region ;
+  rdfs:range ex:Nation .
+
+### Shared datatype properties
+
+ex:name a owl:DatatypeProperty ;
+  rdfs:label "name" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Customer ex:Supplier ex:Nation ex:Region ex:Part )
+  ] ;
+  rdfs:range xsd:string .
+
+ex:address a owl:DatatypeProperty ;
+  rdfs:label "address" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Customer ex:Supplier )
+  ] ;
+  rdfs:range xsd:string .
+
+ex:phone a owl:DatatypeProperty ;
+  rdfs:label "phone" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Customer ex:Supplier )
+  ] ;
+  rdfs:range xsd:string .
+
+ex:accountBalance a owl:DatatypeProperty ;
+  rdfs:label "account balance" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Customer ex:Supplier )
+  ] ;
+  rdfs:range xsd:decimal .
+
+ex:comment a owl:DatatypeProperty ;
+  rdfs:label "comment" ;
+  rdfs:domain owl:Thing ;
+  rdfs:range xsd:string .
+
+### Identifier / foreign-key datatype properties
 
 ex:custKey a owl:DatatypeProperty ;
   rdfs:label "customer key" ;
   rdfs:domain ex:Customer ;
   rdfs:range xsd:integer .
 
-ex:name a owl:DatatypeProperty ;
-  rdfs:label "name" ;
-  rdfs:domain ex:Customer ;
-  rdfs:range xsd:string .
+ex:orderKey a owl:DatatypeProperty ;
+  rdfs:label "order key" ;
+  rdfs:domain ex:Order ;
+  rdfs:range xsd:integer .
 
-ex:address a owl:DatatypeProperty ;
-  rdfs:label "address" ;
-  rdfs:domain ex:Customer ;
-  rdfs:range xsd:string .
+ex:lineNumber a owl:DatatypeProperty ;
+  rdfs:label "line number" ;
+  rdfs:domain ex:LineItem ;
+  rdfs:range xsd:integer .
+
+ex:partKey a owl:DatatypeProperty ;
+  rdfs:label "part key" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Part ex:LineItem ex:PartSupp )
+  ] ;
+  rdfs:range xsd:integer .
+
+ex:supplierKey a owl:DatatypeProperty ;
+  rdfs:label "supplier key" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Supplier ex:LineItem ex:PartSupp )
+  ] ;
+  rdfs:range xsd:integer .
 
 ex:nationKey a owl:DatatypeProperty ;
   rdfs:label "nation key" ;
-  rdfs:domain ex:Customer ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Nation ex:Customer ex:Supplier )
+  ] ;
   rdfs:range xsd:integer .
 
-ex:phone a owl:DatatypeProperty ;
-  rdfs:label "phone" ;
-  rdfs:domain ex:Customer ;
-  rdfs:range xsd:string .
+ex:regionKey a owl:DatatypeProperty ;
+  rdfs:label "region key" ;
+  rdfs:domain [
+    a owl:Class ;
+    owl:unionOf ( ex:Region ex:Nation )
+  ] ;
+  rdfs:range xsd:integer .
 
-ex:accountBalance a owl:DatatypeProperty ;
-  rdfs:label "account balance" ;
-  rdfs:domain ex:Customer ;
-  rdfs:range xsd:decimal .
+### Customer datatype properties
 
 ex:marketSegment a owl:DatatypeProperty ;
   rdfs:label "market segment" ;
@@ -83,11 +255,6 @@ ex:marketSegment a owl:DatatypeProperty ;
   rdfs:range xsd:string .
 
 ### Order datatype properties
-
-ex:orderKey a owl:DatatypeProperty ;
-  rdfs:label "order key" ;
-  rdfs:domain ex:Order ;
-  rdfs:range xsd:integer .
 
 ex:orderStatus a owl:DatatypeProperty ;
   rdfs:label "order status" ;
@@ -120,21 +287,6 @@ ex:shipPriority a owl:DatatypeProperty ;
   rdfs:range xsd:integer .
 
 ### Line item datatype properties
-
-ex:lineNumber a owl:DatatypeProperty ;
-  rdfs:label "line number" ;
-  rdfs:domain ex:LineItem ;
-  rdfs:range xsd:integer .
-
-ex:partKey a owl:DatatypeProperty ;
-  rdfs:label "part key" ;
-  rdfs:domain ex:LineItem ;
-  rdfs:range xsd:integer .
-
-ex:supplierKey a owl:DatatypeProperty ;
-  rdfs:label "supplier key" ;
-  rdfs:domain ex:LineItem ;
-  rdfs:range xsd:integer .
 
 ex:quantity a owl:DatatypeProperty ;
   rdfs:label "quantity" ;
@@ -191,9 +343,47 @@ ex:shipMode a owl:DatatypeProperty ;
   rdfs:domain ex:LineItem ;
   rdfs:range xsd:string .
 
-### Shared datatype property
+### Part datatype properties
 
-ex:comment a owl:DatatypeProperty ;
-  rdfs:label "comment" ;
-  rdfs:domain owl:Thing ;
+ex:manufacturer a owl:DatatypeProperty ;
+  rdfs:label "manufacturer" ;
+  rdfs:domain ex:Part ;
   rdfs:range xsd:string .
+
+ex:brand a owl:DatatypeProperty ;
+  rdfs:label "brand" ;
+  rdfs:domain ex:Part ;
+  rdfs:range xsd:string .
+
+ex:partType a owl:DatatypeProperty ;
+  rdfs:label "part type" ;
+  rdfs:comment "Part type string (p_type); named partType to avoid clashing with rdf:type." ;
+  rdfs:domain ex:Part ;
+  rdfs:range xsd:string .
+
+ex:size a owl:DatatypeProperty ;
+  rdfs:label "size" ;
+  rdfs:domain ex:Part ;
+  rdfs:range xsd:integer .
+
+ex:container a owl:DatatypeProperty ;
+  rdfs:label "container" ;
+  rdfs:domain ex:Part ;
+  rdfs:range xsd:string .
+
+ex:retailPrice a owl:DatatypeProperty ;
+  rdfs:label "retail price" ;
+  rdfs:domain ex:Part ;
+  rdfs:range xsd:decimal .
+
+### Part supply datatype properties
+
+ex:availableQuantity a owl:DatatypeProperty ;
+  rdfs:label "available quantity" ;
+  rdfs:domain ex:PartSupp ;
+  rdfs:range xsd:integer .
+
+ex:supplyCost a owl:DatatypeProperty ;
+  rdfs:label "supply cost" ;
+  rdfs:domain ex:PartSupp ;
+  rdfs:range xsd:decimal .
