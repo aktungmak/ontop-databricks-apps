@@ -47,7 +47,10 @@
   display: none;
 }
 
-#visual-editor-panel > .btn {
+.visual-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
   margin-bottom: var(--space-md);
 }
 
@@ -173,6 +176,47 @@
   margin-bottom: var(--space-md);
 }
 
+.triples-map-card.collapsed header {
+  margin-bottom: 0;
+}
+
+.triples-map-card .triples-map-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.triples-map-card .triples-map-toggle:focus-visible {
+  outline: none;
+  border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2px var(--ring);
+}
+
+.triples-map-card .section-chevron {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 6px solid var(--muted-foreground);
+  transition: transform 0.15s ease;
+}
+
+.triples-map-card:not(.collapsed) .section-chevron {
+  transform: rotate(90deg);
+}
+
+.triples-map-card.collapsed .triples-map-body {
+  display: none;
+}
+
 .triples-map-card header h3 {
   display: flex;
   flex-wrap: wrap;
@@ -181,6 +225,13 @@
   flex: 1;
   font-size: 15px;
   line-height: 20px;
+}
+
+.triples-map-card header h3 .triples-map-id-input {
+  flex: 1;
+  min-width: 260px;
+  max-width: 480px;
+  font-size: 13px;
 }
 
 .triples-map-card h4 {

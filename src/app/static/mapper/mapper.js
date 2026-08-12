@@ -55,6 +55,7 @@ const prefixTbody = $('#prefix-tbody');
 const ontologyList = $('#ontology-list');
 const autogenDialog = $('#dialog-autogenerate');
 const PREFIX_COLLAPSED_KEY = 'mapper-prefixes-collapsed';
+const collapsedTriplesMaps = new Set();
 
 function fingerprint() {
   const quads = state.store.getQuads(null, null, null, null);
@@ -530,12 +531,31 @@ function tableNameFromCard(card) {
   return card?.logicalTable?.type === 'tableName' ? card.logicalTable.value : '';
 }
 
+function updateFoldAllButton(cards) {
+  const btn = $('#btn-fold-all-maps');
+  if (!btn) return;
+  const allCollapsed = cards.length > 0 && cards.every((card) => collapsedTriplesMaps.has(card.id));
+  btn.textContent = allCollapsed ? 'Unfold all' : 'Fold all';
+  btn.disabled = cards.length === 0;
+}
+
+function setAllTriplesMapsCollapsed(collapsed) {
+  const cards = parseTriplesMaps(state.store);
+  if (collapsed) {
+    cards.forEach((card) => collapsedTriplesMaps.add(card.id));
+  } else {
+    cards.forEach((card) => collapsedTriplesMaps.delete(card.id));
+  }
+  renderVisualEditor();
+}
+
 function renderVisualEditor() {
   const cards = parseTriplesMaps(state.store);
   visualCards.innerHTML = '';
   cards.forEach((card) => {
     visualCards.appendChild(renderTriplesMapCard(card, cards));
   });
+  updateFoldAllButton(cards);
 }
 
 function logicalTableUiType(logicalTable) {
@@ -545,48 +565,54 @@ function logicalTableUiType(logicalTable) {
 
 function renderTriplesMapCard(card, cards) {
   const article = document.createElement('article');
-  article.className = 'triples-map-card card';
+  const isCollapsed = collapsedTriplesMaps.has(card.id);
+  article.className = `triples-map-card card${isCollapsed ? ' collapsed' : ''}`;
   const ltType = logicalTableUiType(card.logicalTable);
   const parsed = parseTableName(card.logicalTable.value);
   const isTableName = ltType === 'tableName';
 
   article.innerHTML = `
     <header>
-      <h3>Triples Map: <input type="text" class="input" value="${esc(card.id)}" data-field="id" style="width:120px" /></h3>
+      <button type="button" class="section-toggle triples-map-toggle" data-toggle-map aria-expanded="${!isCollapsed}" aria-label="${isCollapsed ? 'Expand' : 'Collapse'} triples map">
+        <span class="section-chevron" aria-hidden="true"></span>
+      </button>
+      <h3>Triples Map: <input type="text" class="input triples-map-id-input" value="${esc(card.id)}" data-field="id" /></h3>
       <button type="button" class="btn btn-outline" data-remove-map>Remove</button>
     </header>
-    ${card.hasStubs ? '<div class="stub-card alert alert-warning">Contains unsupported constructs — preserved in Text Editor</div>' : ''}
-    <div class="field-row">
-      <label>Logical table</label>
-      <select class="select" data-field="lt-type">
-        <option value="tableName" ${ltType === 'tableName' ? 'selected' : ''}>tableName</option>
-        <option value="sqlQuery" ${ltType === 'sqlQuery' ? 'selected' : ''}>SQLQuery</option>
-      </select>
-    </div>
-    <div data-lt-tableName class="${ltType === 'tableName' ? '' : 'hidden'}">
+    <div class="triples-map-body">
+      ${card.hasStubs ? '<div class="stub-card alert alert-warning">Contains unsupported constructs — preserved in Text Editor</div>' : ''}
       <div class="field-row">
-        <label>Table</label>
-        <div class="uc-picker" data-uc-container></div>
-      </div>
-      <input type="text" class="input" placeholder="catalog.schema.table" value="${esc(card.logicalTable.value)}" data-field="tableName" />
-    </div>
-    <div data-lt-sqlQuery class="${ltType === 'sqlQuery' ? '' : 'hidden'}">
-      <textarea class="input" data-field="sqlQuery" rows="4">${esc(card.logicalTable.value)}</textarea>
-    </div>
-    <h4>Subject map</h4>
-    <div class="field-row">
-      <label>Template</label>
-      <div class="template-input-row">
-        <input type="text" class="input" value="${esc(card.subjectMap.template)}" data-field="sm-template" placeholder="http://example.org/{id}" />
-        <select data-sm-template-columns class="select column-insert-select" ${isTableName ? '' : 'disabled'} title="Insert column placeholder">
-          <option value="">+ column…</option>
+        <label>Logical table</label>
+        <select class="select" data-field="lt-type">
+          <option value="tableName" ${ltType === 'tableName' ? 'selected' : ''}>tableName</option>
+          <option value="sqlQuery" ${ltType === 'sqlQuery' ? 'selected' : ''}>SQLQuery</option>
         </select>
       </div>
+      <div data-lt-tableName class="${ltType === 'tableName' ? '' : 'hidden'}">
+        <div class="field-row">
+          <label>Table</label>
+          <div class="uc-picker" data-uc-container></div>
+        </div>
+        <input type="text" class="input" placeholder="catalog.schema.table" value="${esc(card.logicalTable.value)}" data-field="tableName" />
+      </div>
+      <div data-lt-sqlQuery class="${ltType === 'sqlQuery' ? '' : 'hidden'}">
+        <textarea class="input" data-field="sqlQuery" rows="4">${esc(card.logicalTable.value)}</textarea>
+      </div>
+      <h4>Subject map</h4>
+      <div class="field-row">
+        <label>Template</label>
+        <div class="template-input-row">
+          <input type="text" class="input" value="${esc(card.subjectMap.template)}" data-field="sm-template" placeholder="http://example.org/{id}" />
+          <select data-sm-template-columns class="select column-insert-select" ${isTableName ? '' : 'disabled'} title="Insert column placeholder">
+            <option value="">+ column…</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row"><label>Class</label><input type="text" class="input" value="${esc(card.subjectMap.class)}" data-field="sm-class" /></div>
+      <h4>Predicate-object maps</h4>
+      <div data-pom-container></div>
+      <button type="button" class="btn btn-outline" data-add-pom>New predicate-object map</button>
     </div>
-    <div class="field-row"><label>Class</label><input type="text" class="input" value="${esc(card.subjectMap.class)}" data-field="sm-class" /></div>
-    <h4>Predicate-object maps</h4>
-    <div data-pom-container></div>
-    <button type="button" class="btn btn-outline" data-add-pom>New predicate-object map</button>
   `;
 
   const ucPicker = createUcPicker(article.querySelector('[data-uc-container]'), parsed, () => {
@@ -596,6 +622,10 @@ function renderTriplesMapCard(card, cards) {
       updateLogicalTable(state.store, card.id, { type: 'tableName', value: full });
       if (!card.id || card.id === '#NewMap') {
         const newId = tableToFragmentId(full);
+        if (collapsedTriplesMaps.has(card.id)) {
+          collapsedTriplesMaps.delete(card.id);
+          collapsedTriplesMaps.add(newId);
+        }
         renameTriplesMap(state.store, card.id, newId);
         renderVisualEditor();
       }
@@ -621,10 +651,29 @@ function renderTriplesMapCard(card, cards) {
     updateLogicalTable(state.store, card.id, { type: 'sqlQuery', value: e.target.value });
     markDirty();
   });
+  article.querySelector('[data-toggle-map]').addEventListener('click', () => {
+    if (collapsedTriplesMaps.has(card.id)) collapsedTriplesMaps.delete(card.id);
+    else collapsedTriplesMaps.add(card.id);
+    const collapsed = collapsedTriplesMaps.has(card.id);
+    article.classList.toggle('collapsed', collapsed);
+    article.querySelector('[data-toggle-map]').setAttribute(
+      'aria-expanded',
+      String(!collapsed),
+    );
+    article.querySelector('[data-toggle-map]').setAttribute(
+      'aria-label',
+      `${collapsed ? 'Expand' : 'Collapse'} triples map`,
+    );
+    updateFoldAllButton(parseTriplesMaps(state.store));
+  });
   article.querySelector('[data-field="id"]').addEventListener('change', (e) => {
     const oldId = card.id;
     let newId = e.target.value.trim();
     if (!newId.startsWith('#')) newId = `#${newId}`;
+    if (collapsedTriplesMaps.has(oldId)) {
+      collapsedTriplesMaps.delete(oldId);
+      collapsedTriplesMaps.add(newId);
+    }
     renameTriplesMap(state.store, oldId, newId);
     renderVisualEditor();
     markDirty();
@@ -665,6 +714,7 @@ function renderTriplesMapCard(card, cards) {
   });
   article.querySelector('[data-remove-map]').addEventListener('click', () => {
     if (!confirm('Remove this triples map?')) return;
+    collapsedTriplesMaps.delete(card.id);
     removeTriplesMap(state.store, card.id);
     renderVisualEditor();
     markDirty();
@@ -1147,6 +1197,12 @@ async function init() {
     addTriplesMap(state.store, newEmptyCard(), state.prefixes);
     renderVisualEditor();
     markDirty();
+  });
+  $('#btn-fold-all-maps').addEventListener('click', () => {
+    const cards = parseTriplesMaps(state.store);
+    if (!cards.length) return;
+    const allCollapsed = cards.every((card) => collapsedTriplesMaps.has(card.id));
+    setAllTriplesMapsCollapsed(!allCollapsed);
   });
   $('#btn-load-live').addEventListener('click', loadLiveMapping);
   $('#input-upload').addEventListener('change', (e) => { if (e.target.files[0]) uploadFile(e.target.files[0]); e.target.value = ''; });
