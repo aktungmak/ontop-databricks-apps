@@ -7,6 +7,7 @@ from typing import Any
 
 import httpx
 from fastmcp import FastMCP
+from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 
 from config import Settings
@@ -130,12 +131,15 @@ def check_sparql(query: str) -> dict[str, Any]:
 
 
 @mcp.tool
-async def execute_sparql(query: str) -> dict[str, Any] | str:
+async def execute_sparql(query: str) -> dict[str, Any]:
     """Execute a SPARQL query against the Virtual Knowledge Graph returning
-    results in SPARQL JSON format or an error.
+    results in SPARQL JSON format.
 
-    Prefer ``check_sparql`` first. On failure, returns an error message
-    so you can revise the query.
+    Prefer ``check_sparql`` first. On ANY failure — missing auth, reformulation
+    error, or a warehouse SQL/permission error — this raises a ``ToolError`` so the
+    MCP result is flagged ``isError`` and cannot be mistaken for a result. A
+    successful query with zero matches is NOT an error: it returns normally with an
+    empty ``bindings`` array.
 
     Full-native reformulation has limits (e.g. some OPTIONAL/BIND shapes,
     property paths, SERVICE, Update). Consider limiting the size of results
@@ -146,7 +150,7 @@ async def execute_sparql(query: str) -> dict[str, Any] | str:
     try:
         token = get_mcp_user_token()
     except McpAuthError as exc:
-        return f"Error ({exc.status_code}): {exc.message}"
+        raise ToolError(f"({exc.status_code}): {exc.message}") from exc
 
     result = await execute_sparql_query(
         query,
@@ -157,6 +161,6 @@ async def execute_sparql(query: str) -> dict[str, Any] | str:
     )
 
     if isinstance(result, SparqlExecuteError):
-        return f"Error ({result.status_code}): {result.message}"
+        raise ToolError(f"({result.status_code}): {result.message}")
 
     return result.data
