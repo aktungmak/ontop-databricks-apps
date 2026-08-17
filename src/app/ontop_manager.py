@@ -395,7 +395,7 @@ class OntopProcessManager:
         return text
 
     def read_ontop_log(self, tail: int | None = None) -> str:
-        """Public accessor for Ontop's captured stdout/stderr (served by /logz).
+        """Public accessor for Ontop's captured stdout/stderr (served by /ontop-log).
 
         Ontop's output goes to a file sink rather than the app's stdout, so it is
         not in ``databricks apps logs``; this exposes it for remote inspection.

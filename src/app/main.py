@@ -128,13 +128,15 @@ async def health(request: Request) -> dict:
     }
 
 
-@app.get("/logz")
-async def logz(request: Request, tail: int = 200) -> Response:
+@app.get("/ontop-log")
+async def ontop_log(request: Request, tail: int = 200) -> Response:
     """Ontop's captured stdout/stderr (last ``tail`` lines).
 
     Ontop's output goes to a file sink, so it is not in ``databricks apps logs``;
     this makes it inspectable remotely. Requires the forwarded user token, same as
-    /sparql, since Ontop logs can echo mapping/SQL detail.
+    /sparql, since Ontop logs can echo mapping/SQL detail. NB: the path is
+    /ontop-log, not /logz -- Databricks Apps reserves /logz for the platform's own
+    (HTML/WebSocket) log viewer, which shadows any app route of that name.
     """
     try:
         get_user_token(request)
