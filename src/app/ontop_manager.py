@@ -320,10 +320,13 @@ class OntopProcessManager:
             " ".join(cmd),
             env.get("JAVA_HOME", "<unset>"),
         )
+        # Inherit the app's stdout/stderr so Ontop's logs stream into the
+        # Databricks app log. Capturing into an unread PIPE deadlocks the JVM
+        # once the 64KB pipe buffer fills (logback's console appender blocks).
         self._process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stdout=None,
+            stderr=None,
             cwd=str(self._ontop_binary.parent),
             env=env,
         )
@@ -347,10 +350,10 @@ class OntopProcessManager:
         deadline = time.time() + timeout
         while time.time() < deadline:
             if self._process and self._process.poll() is not None:
-                output = ""
-                if self._process.stdout:
-                    output = self._process.stdout.read().decode("utf-8", errors="replace")
-                raise RuntimeError(f"Ontop exited early:\n{output}")
+                raise RuntimeError(
+                    f"Ontop exited early with code {self._process.returncode}; "
+                    "see the app log for Ontop output"
+                )
             if self._port_open(port):
                 return
             time.sleep(0.5)
