@@ -394,6 +394,14 @@ class OntopProcessManager:
             text = "\n".join(lines[-tail:])
         return text
 
+    def read_ontop_log(self, tail: int | None = None) -> str:
+        """Public accessor for Ontop's captured stdout/stderr (served by /logz).
+
+        Ontop's output goes to a file sink rather than the app's stdout, so it is
+        not in ``databricks apps logs``; this exposes it for remote inspection.
+        """
+        return self._read_ontop_log(tail)
+
     def _wait_for_port(self, port: int, timeout: float) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:

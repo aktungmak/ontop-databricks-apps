@@ -128,6 +128,23 @@ async def health(request: Request) -> dict:
     }
 
 
+@app.get("/logz")
+async def logz(request: Request, tail: int = 200) -> Response:
+    """Ontop's captured stdout/stderr (last ``tail`` lines).
+
+    Ontop's output goes to a file sink, so it is not in ``databricks apps logs``;
+    this makes it inspectable remotely. Requires the forwarded user token, same as
+    /sparql, since Ontop logs can echo mapping/SQL detail.
+    """
+    try:
+        get_user_token(request)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return Response(content=detail, status_code=exc.status_code, media_type="text/plain")
+    text = ontop_manager.read_ontop_log(tail=tail)
+    return Response(content=text or "(no Ontop log yet)", media_type="text/plain")
+
+
 @app.api_route("/sparql", methods=["GET", "POST", "OPTIONS"])
 async def sparql(request: Request) -> Response:
     """SPARQL Protocol endpoint: GET ``?query=`` or POST form field ``query``."""
