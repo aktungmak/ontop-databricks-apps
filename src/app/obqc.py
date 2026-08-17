@@ -24,6 +24,9 @@ QUERY_GRAPH = URIRef("urn:obqc:query")
 ONTOLOGY_GRAPH = URIRef("urn:obqc:ontology")
 QQ = URIRef("urn:obqc:qq#")  # skolem prefix for SPARQL variables
 
+# Universal classes: a domain/range of these constrains nothing.
+_TOP_CLASSES = (RDFS.Resource, OWL.Thing)
+
 _SPARQL_INIT_NS = {
     "rdf": RDF,
     "rdfs": RDFS,
@@ -307,7 +310,42 @@ def _build_conjunctive_dataset(query_graph: Graph, ontology: Graph) -> Dataset:
         qg.add(triple)
     for triple in ontology:
         og.add(triple)
+    _add_top_class_entailments(og)
     return ds
+
+
+def _add_top_class_entailments(og: Graph) -> None:
+    """Make every class a subclass of the top classes.
+
+    The rules test compatibility by walking ``rdfs:subClassOf*``, which finds no
+    path to ``rdfs:Resource`` / ``owl:Thing`` unless it is asserted. Without this,
+    a property declared ``rdfs:domain rdfs:Resource`` (i.e. any subject) looks
+    incompatible with every specific class. The top classes are only ever added
+    as targets, so this creates no path between two specific classes.
+    """
+    for top in _TOP_CLASSES:
+        for other in _TOP_CLASSES:
+            if top != other:
+                og.add((top, RDFS.subClassOf, other))
+
+    for cls in _class_terms(og):
+        for top in _TOP_CLASSES:
+            if cls != top:
+                og.add((cls, RDFS.subClassOf, top))
+
+
+def _class_terms(og: Graph) -> set[URIRef]:
+    terms: set[URIRef] = set()
+    for cls_type in (RDFS.Class, OWL.Class):
+        terms.update(s for s in og.subjects(RDF.type, cls_type) if isinstance(s, URIRef))
+    for predicate in (RDFS.domain, RDFS.range):
+        terms.update(o for o in og.objects(None, predicate) if isinstance(o, URIRef))
+    for subject, _, obj in og.triples((None, RDFS.subClassOf, None)):
+        if isinstance(subject, URIRef):
+            terms.add(subject)
+        if isinstance(obj, URIRef):
+            terms.add(obj)
+    return terms
 
 
 def _run_rule(dataset: Dataset, rule: _Rule) -> list[Mapping[str, Node]]:

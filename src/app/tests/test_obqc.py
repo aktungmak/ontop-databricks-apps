@@ -214,6 +214,25 @@ def test_optional_bgp_is_linted() -> None:
     assert any(v["rule"] == "domain" for v in result["violations"])
 
 
+def test_top_class_domain_is_compatible_with_any_class() -> None:
+    """A domain of rdfs:Resource constrains nothing, so must not be flagged."""
+    g = _insurance_ontology()
+    g.add((IN.sourceSystem, RDF.type, OWL.DatatypeProperty))
+    g.add((IN.sourceSystem, RDFS.domain, RDFS.Resource))
+    g.add((IN.sourceSystem, RDFS.range, XSD.string))
+
+    query = """
+    PREFIX in: <http://example.org/insurance/>
+    SELECT * WHERE {
+      ?policy a in:Policy ;
+              in:policyNumber ?num ;
+              in:sourceSystem ?src .
+    }
+    """
+    result = check_sparql(query, g)
+    assert result == {"ok": True, "violations": []}
+
+
 def test_extract_bgp_includes_optional() -> None:
     query = """
     PREFIX ex: <http://example.org/tpch/>
