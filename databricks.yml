@@ -42,8 +42,8 @@ targets:
       mappings:
         path: ./mappings
         files:
-          - source: ./mappings/mapping.ttl
-          - source: ./mappings/ontology.ttl
+          - source: ./mappings/${var.mapping_file}
+          - source: ./mappings/${var.ontology_file}
 
   app:
     mode: production

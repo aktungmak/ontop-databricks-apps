@@ -140,6 +140,17 @@ async def execute_sparql(query: str) -> dict[str, Any] | str:
     Full-native reformulation has limits (e.g. some OPTIONAL/BIND shapes,
     property paths, SERVICE, Update). Consider limiting the size of results
     to keep the context clean.
+
+    Do not nest OPTIONAL inside OPTIONAL: a variable bound only in the inner
+    block has no inferable type ("could not infer the unique type of its
+    variable X"). Keep OPTIONAL blocks as siblings at one level, merging the
+    inner triple patterns into the outer block where the data permits.
+
+    Avoid GROUP_CONCAT: it maps to Spark ``listagg``, which fails on the
+    warehouse (``AttributeReference cannot be cast to SortOrder``). To show
+    the members of a group, either add the variable to GROUP BY for one row
+    per member, or run a second query. SUM, COUNT, COUNT(DISTINCT), MIN and
+    MAX over numbers and strings are safe.
     """
     runtime = _require_runtime()
 
