@@ -127,10 +127,11 @@ class OntopProcessManager:
                 "or OpenJDK*jre*.tar.gz artifacts."
             )
 
-        jdbc_local = artifacts_dir / "jdbc" / "DatabricksJDBC42.jar"
+        jdbc_name = self._find_jdbc_artifact_name(client, artifacts_remote)
+        jdbc_local = artifacts_dir / "jdbc" / jdbc_name
         download_volume_file(
             client,
-            f"{artifacts_remote}/DatabricksJDBC42.jar",
+            f"{artifacts_remote}/{jdbc_name}",
             jdbc_local,
         )
         self._install_jdbc_driver(jdbc_local)
@@ -183,6 +184,17 @@ class OntopProcessManager:
                 return entry.name
         return None
 
+    def _find_jdbc_artifact_name(self, client: WorkspaceClient, artifacts_remote: str) -> str:
+        """Locate the versioned Databricks JDBC jar (``databricks-jdbc-<version>.jar``)."""
+        listing = client.files.list_directory_contents(artifacts_remote)
+        for entry in listing:
+            if entry.name.startswith("databricks-jdbc-") and entry.name.endswith(".jar"):
+                return entry.name
+        raise FileNotFoundError(
+            f"No databricks-jdbc-*.jar found in {artifacts_remote}/. "
+            "Deploy the bundle to upload the JDBC driver."
+        )
+
     def _find_ontop_artifact_name(self, client: WorkspaceClient, volume: str) -> str:
         artifacts_remote = bundle_remote_dir(volume, "artifacts")
         protege_name, cli_name = self._find_ontop_artifact_names(client, artifacts_remote)
@@ -228,7 +240,9 @@ class OntopProcessManager:
 
         jdbc_dir = self._ontop_binary.parent / "jdbc"
         jdbc_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(jdbc_jar, jdbc_dir / "DatabricksJDBC42.jar")
+        # Preserve the versioned jar name; Ontop loads every jar in this dir onto
+        # its classpath by directory scan, so the filename here is not significant.
+        shutil.copy2(jdbc_jar, jdbc_dir / jdbc_jar.name)
 
     def _ontop_env(self) -> dict[str, str]:
         env = os.environ.copy()

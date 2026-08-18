@@ -11,7 +11,7 @@ variables:
   ontop_version:
     default: "5.5.0"
   jdbc_version:
-    default: "2.7.5"
+    default: "3.4.1"
   jre_version:
     default: "17.0.19_10"
   mapping_file:
@@ -62,7 +62,7 @@ targets:
         files:
           - source: ./artifacts/ontop-cli-*.zip
           - source: ./artifacts/OpenJDK*jre*.tar.gz
-          - source: ./artifacts/DatabricksJDBC42.jar
+          - source: ./artifacts/databricks-jdbc-*.jar
     resources:
       sql_warehouses:
         ontop_vkg_warehouse:
