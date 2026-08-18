@@ -14,6 +14,44 @@ from sparql_execute import (
     SparqlExecuteSuccess,
     execute_sparql_query,
 )
+from sparql_execute import is_permission_denied, permission_denied_summary
+
+TABLE_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501"
+)
+SCHEMA_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have USE SCHEMA on Schema 'cat.sch'. SQLSTATE: 42501"
+)
+CATALOG_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "User does not have USE CATALOG on Catalog 'cat'. SQLSTATE: 42501"
+)
+CATALOG_SCOPE_DENIAL = (
+    "[INSUFFICIENT_PERMISSIONS] Insufficient privileges:\n"
+    "Catalog 'cat' is not accessible in current workspace SQLSTATE: 42501"
+)
+
+
+def test_is_permission_denied_matches_all_levels() -> None:
+    for msg in (TABLE_DENIAL, SCHEMA_DENIAL, CATALOG_DENIAL, CATALOG_SCOPE_DENIAL):
+        assert is_permission_denied(msg) is True
+
+
+def test_is_permission_denied_ignores_other_errors() -> None:
+    assert is_permission_denied("Warehouse is stopped") is False
+    assert is_permission_denied("[PARSE_SYNTAX_ERROR] near 'SELCT'") is False
+
+
+def test_permission_denied_summary_is_single_line_no_stack() -> None:
+    summary = permission_denied_summary(TABLE_DENIAL)
+    assert summary == (
+        "You lack Unity Catalog access to an object this query requires: "
+        "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501"
+    )
+    assert "\n" not in summary
+    assert "org.apache.spark" not in summary
 
 NATIVE_SQL = "SELECT c, name FROM books WHERE c = 'secret'"
 
@@ -146,6 +184,101 @@ def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
     assert isinstance(result, SparqlExecuteError)
     assert result.status_code == 502
     assert result.message == "Warehouse is stopped"
+    _error_has_no_native_sql(result)
+
+
+from databricks.sql.exc import ServerOperationError
+
+
+def test_permission_denial_returns_403_summary() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    denial = ServerOperationError(
+        TABLE_DENIAL,
+        context={"operation-id": "x", "diagnostic-info": "org.apache.spark...HUGE"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=denial):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c ?name WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 403
+    assert "You lack Unity Catalog access" in result.message
+    assert "SELECT on Table 'cat.sch.tbl'" in result.message
+    assert "org.apache.spark" not in result.message
+    _error_has_no_native_sql(result)
+
+
+def test_non_permission_dbsql_error_returns_502() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    # A server-side error that is NOT a permission denial (no 42501 token).
+    syntax_err = ServerOperationError(
+        "[UNRESOLVED_COLUMN] A column with name `nope` cannot be resolved.",
+        context={"operation-id": "y"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=syntax_err):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 502
+    assert "UNRESOLVED_COLUMN" in result.message
+    _error_has_no_native_sql(result)
+
+
+def test_non_permission_error_scrubs_native_sql() -> None:
+    """Fix A: multi-line error with embedded SQL must be scrubbed to last-line-only."""
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    # Multi-line error: SQL echo on earlier lines, useful hint on the last line.
+    # _last_line must return the hint and discard the SQL echo.
+    multiline_err = ServerOperationError(
+        "SELECT c, name FROM books WHERE c = 'secret'\n"
+        "[PARSE_SYNTAX_ERROR] Syntax error at or near 'FROM'.",
+        context={"operation-id": "z"},
+    )
+    with patch("sparql_execute.run_sql", side_effect=multiline_err):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c ?name WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteError)
+    assert result.status_code == 502
+    assert "PARSE_SYNTAX_ERROR" in result.message
+    assert "SELECT c, name FROM books" not in result.message
     _error_has_no_native_sql(result)
 
 

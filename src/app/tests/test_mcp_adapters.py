@@ -117,6 +117,34 @@ def test_execute_sparql_returns_json_on_success() -> None:
     assert result == payload
 
 
+def test_execute_sparql_permission_denied_returns_403_string() -> None:
+    client = AsyncMock(spec=httpx.AsyncClient)
+    manager = MagicMock()
+    manager.is_running = True
+    _configure_runtime(client=client, manager=manager)
+
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch(
+            "mcp_server.execute_sparql_query",
+            new_callable=AsyncMock,
+            return_value=SparqlExecuteError(
+                message=(
+                    "You lack Unity Catalog access to an object this query requires: "
+                    "User does not have SELECT on Table 'cat.sch.tbl'. SQLSTATE: 42501"
+                ),
+                status_code=403,
+            ),
+        ),
+    ):
+        result = asyncio.run(execute_sparql("SELECT ?s WHERE { ?s ?p ?o }"))
+
+    assert isinstance(result, str)
+    assert result.startswith("Error (403)")
+    assert "You lack Unity Catalog access" in result
+    assert "org.apache.spark" not in result
+
+
 def test_check_sparql_unavailable_ontology() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     manager = MagicMock()
