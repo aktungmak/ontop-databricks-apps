@@ -8,6 +8,16 @@ variables:
     description: UC schema for volume
   warehouse_cluster_size:
     default: Small
+  compute_size:
+    description: >-
+      Databricks Apps instance size (MEDIUM | LARGE | XLARGE). MEDIUM
+      (<=2 vCPU / 6 GB) is the platform default. Sized with ontop_max_heap below.
+    default: MEDIUM
+  ontop_max_heap:
+    description: >-
+      JVM max heap (-Xmx) for the Ontop CLI, passed via ONTOP_JAVA_ARGS
+      (Ontop otherwise defaults to -Xmx512m). Raise if compute_size is LARGE.
+    default: "2g"
   ontop_version:
     default: "5.5.0"
   jdbc_version:
@@ -81,6 +91,8 @@ targets:
           name: mcp-ontop-vkg
           description: Ontop VKG + MCP
           source_code_path: ./src/app
+          # Pin the instance size; sized together with ONTOP_MAX_HEAP below.
+          compute_size: ${var.compute_size}
           # config replaces app.yaml wholesale per field, so command and the
           # full env list must both live here.
           config:
@@ -104,6 +116,10 @@ targets:
                 value: ${var.catalog}
               - name: VKG_DEFAULT_SCHEMA
                 value: ${var.schema}
+              # JVM max heap for the Ontop CLI; sized to compute_size above.
+              # Overrides Ontop's -Xmx512m launcher default (see ontop_manager.py).
+              - name: ONTOP_MAX_HEAP
+                value: ${var.ontop_max_heap}
           user_api_scopes:
             - catalog.catalogs:read
             - catalog.schemas:read
