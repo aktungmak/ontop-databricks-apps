@@ -4,15 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 import httpx
 import uvicorn
 from databricks.sdk import WorkspaceClient
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp.utilities.lifespan import combine_lifespans
 
@@ -39,6 +41,11 @@ logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 MCP_PATH = "/mcp"
+
+# /health probes the reformulate endpoint with this query and timeout so a wedged
+# (unresponsive-but-alive) Ontop reports unhealthy. Mapping-agnostic; overridable.
+HEALTH_QUERY = os.environ.get("VKG_HEALTH_QUERY", "ASK {}")
+HEALTH_REFORMULATE_TIMEOUT = float(os.environ.get("VKG_HEALTH_TIMEOUT", "8"))
 
 settings = Settings.from_env()
 ontop_manager = OntopProcessManager(settings)
@@ -120,12 +127,49 @@ async def mapper() -> Response:
 
 
 @app.get("/health")
-async def health(request: Request) -> dict:
-    return {
-        "status": "ok" if ontop_manager.is_running else "degraded",
-        "ontop_running": ontop_manager.is_running,
-        "ontology_loaded": request.app.state.ontology_store.is_available(),
+async def health(request: Request) -> Response:
+    """Readiness check that exercises the reformulate endpoint.
+
+    Process liveness alone is misleading: an alive-but-unresponsive Ontop (a stalled
+    JVM, a full stdout sink, a deadlock) still passes a ``poll()`` check. Probe
+    reformulate with a short timeout; a timeout means the endpoint is wedged -> 503,
+    so the platform can restart or route around this instance.
+    """
+    running = ontop_manager.is_running
+    ontology = request.app.state.ontology_store.is_available()
+    reformulate_responsive = False
+    reformulate_status: int | None = None
+    detail: str | None = None
+    if not running:
+        detail = "ontop process not running"
+    else:
+        target = (
+            f"http://127.0.0.1:{settings.ontop_internal_port}/ontop/reformulate"
+            "?forNativeConsumption=true"
+        )
+        try:
+            resp = await request.app.state.http_client.post(
+                target,
+                headers={"content-type": "application/x-www-form-urlencoded"},
+                content=urlencode({"query": HEALTH_QUERY}).encode("utf-8"),
+                timeout=HEALTH_REFORMULATE_TIMEOUT,
+            )
+            reformulate_responsive = True  # any HTTP reply proves it is not wedged
+            reformulate_status = resp.status_code
+        except httpx.RequestError as exc:
+            detail = f"reformulate unresponsive ({type(exc).__name__}); endpoint may be wedged"
+
+    healthy = running and ontology and reformulate_responsive
+    payload = {
+        "status": "ok" if healthy else "degraded",
+        "ontop_running": running,
+        "ontology_loaded": ontology,
+        "reformulate_responsive": reformulate_responsive,
+        "reformulate_status": reformulate_status,
     }
+    if detail:
+        payload["detail"] = detail
+    return JSONResponse(payload, status_code=200 if healthy else 503)
 
 
 @app.api_route("/sparql", methods=["GET", "POST", "OPTIONS"])
