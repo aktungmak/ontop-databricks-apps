@@ -13,10 +13,13 @@ Ensure that you have the latest Databricks CLI installed, then run:
 
 ```bash
 databricks auth login
+export BUNDLE_VAR_catalog=main
+export BUNDLE_VAR_schema=default
+export BUNDLE_VAR_instance=alpha
 make run
 ```
 
-You will also need to edit `databricks.yml` to set the `catalog` and `schema` variables where the mapping files and other artefacts will be stored (see [Configuration](#configuration) below). The catalog and schema must already exist — the bundle will not create them.
+You must supply `catalog`, `schema`, and `instance` (see [Configuration](#configuration)). The catalog and schema must already exist — the bundle will not create them. `instance` is a short label that names this deployment’s volume, warehouse, and app so multiple independent copies can coexist in one workspace.
 
 ## Mappings and ontology
 
@@ -39,11 +42,27 @@ DAB supports only one `artifact_path` per target, and the UC volume must exist b
 
 | Target | Purpose |
 |--------|---------|
-| `volume` | Create the UC volume |
-| `mappings` | Upload `mapping.ttl` and optional `ontology.ttl` to the volume |
-| `app` | Deploy warehouse, app, and Ontop/JDBC artifacts |
+| `volume` | Create the UC volume `ontop_vkg_<instance>` in the specified catalog and schema |
+| `mappings` | Upload `mapping.ttl` and optional `ontology.ttl` to that volume |
+| `app` | Deploy warehouse, app, and Ontop/JDBC artifacts for that instance |
 
 The `make run` target runs all of these in order and then starts the app.
+
+Each `instance` gets its own volume (`ontop_vkg_<instance>`), SQL warehouse (`ontop-vkg-wh-<instance>`),
+app (`mcp-ontop-vkg-<instance>`), and bundle state (via a per-instance `root_path`).
+Destroying one instance’s targets tears down only that instance’s resources.
+
+### Multiple instances
+
+Deploy a second copy by choosing a different `BUNDLE_VAR_instance` (and optionally a different catalog/schema):
+
+```bash
+# First deployment
+BUNDLE_VAR_catalog=main BUNDLE_VAR_schema=default BUNDLE_VAR_instance=alpha make run
+
+# Second deployment in the same workspace
+BUNDLE_VAR_catalog=main BUNDLE_VAR_schema=default BUNDLE_VAR_instance=beta make run
+```
 
 ## Endpoints
 
@@ -85,12 +104,16 @@ Bundle variables in `databricks.yml`:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `catalog` | n/a | UC catalog for volume and connection default |
-| `schema` | n/a | UC schema for volume and connection default |
+| `catalog` | *(required)* | UC catalog for volume and connection default |
+| `schema` | *(required)* | UC schema for volume and connection default |
+| `instance` | *(required)* | Used to differentiate multiple deployments in the same workspace |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
 | `ontop_version` | `5.5.0` | Ontop release version |
 | `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
 | `jre_version` | `17.0.19_10` | Temurin JRE version |
+
+Set required variables using the Databricks bundle environment-variable convention:
+`BUNDLE_VAR_catalog`, `BUNDLE_VAR_schema`, and `BUNDLE_VAR_instance`. 
 
 ## Required Unity Catalog grants
 
