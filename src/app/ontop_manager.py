@@ -309,6 +309,11 @@ class OntopProcessManager:
             f"jdbc.driver=com.databricks.client.jdbc.Driver\n"
             "ontop.enableFactExtractionWithTBox=true\n"
             "ontop.reformulateToFullNativeQuery=true\n"
+            # Mapping source queries commonly expose derived columns (CONCAT(...) AS
+            # Label, computed join keys) whose SQL type Ontop cannot infer. Without
+            # this it refuses to load the *entire* mapping with UnknownDatatypeException,
+            # so a single untyped expression breaks startup. Treat those as xsd:string.
+            "ontop.inferDefaultDatatype=true\n"
         )
         self.properties_path.write_text(content)
         logger.info("Wrote JDBC M2M OAuth properties for service principal %s", client_id)
@@ -330,9 +335,16 @@ class OntopProcessManager:
             "--port",
             str(self.settings.ontop_internal_port),
             "--disable-portal-page",
-            "--lazy",
             "--dev",  # exposes /ontop/reformulate
         ]
+        # NB: no --lazy. With it, Ontop opens its port in ~4s but defers
+        # repository.init() -- JDBC connect, GetColumns metadata for every mapped
+        # table, mapping parse/validation -- to the first query, which then blocks for
+        # ~80s on a large mapping. That can exceed the reformulate client timeout and
+        # surface as a misleading "Failed to reach Ontop reformulate endpoint" 502.
+        # Initialising eagerly moves the cost into startup, so the port only opens once
+        # Ontop can actually serve. See Ontop's
+        # OntopVirtualRepositoryBean.setupVirtualRepository: !lazy -> repository.init().
         if self._ontology_path and self._ontology_path.exists():
             cmd.extend(["--ontology", str(self._ontology_path)])
 
@@ -353,8 +365,17 @@ class OntopProcessManager:
             cwd=str(self._ontop_binary.parent),
             env=env,
         )
-        self._wait_for_port(self.settings.ontop_internal_port, timeout=120)
-        logger.info("Ontop endpoint started on port %s", self.settings.ontop_internal_port)
+        # Eager init runs before Tomcat binds, so the port can take as long as the
+        # mapping needs. Allow generous headroom for larger mappings or a cold
+        # warehouse. A genuine failure still aborts promptly: _wait_for_port polls the
+        # subprocess each iteration and raises.
+        started_at = time.time()
+        self._wait_for_port(self.settings.ontop_internal_port, timeout=600)
+        logger.info(
+            "Ontop endpoint started on port %s (mapping initialised in %.1fs)",
+            self.settings.ontop_internal_port,
+            time.time() - started_at,
+        )
 
     def stop(self) -> None:
         if self._process is None:
