@@ -28,6 +28,11 @@ _ARROW_JAVA_OPENS = (
 # Spring Boot 2.3+ hides exception messages in /error responses by default.
 # Ontop's /ontop/reformulate relies on that path for reformulation failures.
 _SPRING_ERROR_MESSAGE = "-Dserver.error.include-message=always"
+# Ontop's CLI launcher appends -Xmx512m only if ONTOP_JAVA_ARGS has no -Xmx
+# (client/cli/src/main/resources/ontop). Overridable via the ONTOP_MAX_HEAP env
+# var (from the ontop_max_heap bundle variable); this constant is the fallback so
+# a deploy that omits it still gets a sane heap.
+_DEFAULT_MAX_HEAP = "2g"
 
 
 class OntopProcessManager:
@@ -262,12 +267,15 @@ class OntopProcessManager:
 
         # Ontop CLI honors ONTOP_JAVA_ARGS when launching the JVM (see ontop docker README).
         existing_java_args = env.get("ONTOP_JAVA_ARGS", "").strip()
-        extra_java_args = f"{_ARROW_JAVA_OPENS} {_SPRING_ERROR_MESSAGE}"
-        env["ONTOP_JAVA_ARGS"] = (
-            f"{existing_java_args} {extra_java_args}".strip()
-            if existing_java_args
-            else extra_java_args
-        )
+        args = [existing_java_args] if existing_java_args else []
+        # Set the max heap unless the caller already pinned one. Ontop's launcher
+        # only defaults -Xmx512m when no -Xmx is present, so honor a pre-existing
+        # value the same way and avoid emitting two -Xmx flags.
+        if "-Xmx" not in existing_java_args:
+            max_heap = os.environ.get("ONTOP_MAX_HEAP", "").strip() or _DEFAULT_MAX_HEAP
+            args.append(f"-Xmx{max_heap}")
+        args.extend([_ARROW_JAVA_OPENS, _SPRING_ERROR_MESSAGE])
+        env["ONTOP_JAVA_ARGS"] = " ".join(args).strip()
         return env
 
     @staticmethod
@@ -330,9 +338,10 @@ class OntopProcessManager:
 
         env = self._ontop_env()
         logger.info(
-            "Starting Ontop: %s (JAVA_HOME=%s)",
+            "Starting Ontop: %s (JAVA_HOME=%s, ONTOP_JAVA_ARGS=%s)",
             " ".join(cmd),
             env.get("JAVA_HOME", "<unset>"),
+            env.get("ONTOP_JAVA_ARGS", "<unset>"),
         )
         # Inherit the app's stdout/stderr so Ontop's logs stream into the
         # Databricks app log. Capturing into an unread PIPE deadlocks the JVM
