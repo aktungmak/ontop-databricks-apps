@@ -6,6 +6,10 @@ variables:
     description: UC catalog for volume
   schema:
     description: UC schema for volume
+  instance:
+    description: >-
+      Instance label for this deployment. Distinguishes multiple independent
+      copies in the same workspace (volume, warehouse, app, and bundle state).
   warehouse_cluster_size:
     default: Small
   compute_size:
@@ -35,19 +39,21 @@ targets:
     mode: production
     workspace:
       profile: DEFAULT
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
     resources:
       volumes:
         ontop_vkg_data:
           catalog_name: ${var.catalog}
           schema_name: ${var.schema}
-          name: ontop_vkg
+          name: ontop_vkg_${var.instance}
           volume_type: MANAGED
 
   mappings:
     mode: production
     workspace:
       profile: DEFAULT
-      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg/mappings
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
+      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg_${var.instance}/mappings
     artifacts:
       mappings:
         path: ./mappings
@@ -59,7 +65,8 @@ targets:
     mode: production
     workspace:
       profile: DEFAULT
-      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg/artifacts
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
+      artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg_${var.instance}/artifacts
     artifacts:
       ontop_runtime:
         path: .
@@ -76,7 +83,7 @@ targets:
     resources:
       sql_warehouses:
         ontop_vkg_warehouse:
-          name: ontop-vkg-wh
+          name: ontop-vkg-wh-${var.instance}
           warehouse_type: PRO
           enable_serverless_compute: true
           cluster_size: ${var.warehouse_cluster_size}
@@ -88,7 +95,7 @@ targets:
 
       apps:
         ontop_vkg:
-          name: mcp-ontop-vkg
+          name: mcp-ontop-vkg-${var.instance}
           description: Ontop VKG + MCP
           source_code_path: ./src/app
           # Pin the instance size; sized together with ONTOP_MAX_HEAP below.
@@ -103,7 +110,7 @@ targets:
               - name: DATABRICKS_WAREHOUSE_ID
                 value_from: sql-warehouse
               - name: MAPPINGS_VOLUME_PATH
-                value_from: mappings-volume
+                value: /Volumes/${var.catalog}/${var.schema}/ontop_vkg_${var.instance}
               - name: VKG_MAPPING_FILE
                 value: ${var.mapping_file}
               - name: VKG_ONTOLOGY_FILE
@@ -134,5 +141,5 @@ targets:
             - name: mappings-volume
               uc_securable:
                 securable_type: VOLUME
-                securable_full_name: ${var.catalog}.${var.schema}.ontop_vkg
+                securable_full_name: ${var.catalog}.${var.schema}.ontop_vkg_${var.instance}
                 permission: READ_VOLUME
