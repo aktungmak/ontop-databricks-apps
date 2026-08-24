@@ -1,6 +1,6 @@
 PROFILE ?= DEFAULT
 
-.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run test ui-test
+.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run app-test ui-test destroy-app destroy-mappings destroy-volume destroy
 
 validate:
 	databricks bundle validate --strict -t volume --profile $(PROFILE)
@@ -26,3 +26,14 @@ app-test:
 
 ui-test:
 	cd src/app/static/mapper && npm install --no-fund --no-audit && npm test
+
+destroy-app:
+	databricks bundle destroy -t app --auto-approve --profile $(PROFILE)
+
+destroy-mappings:
+	databricks bundle destroy -t mappings --auto-approve --profile $(PROFILE)
+
+destroy-volume:
+	databricks bundle destroy -t volume --auto-approve --profile $(PROFILE)
+
+destroy: destroy-app destroy-mappings destroy-volume
