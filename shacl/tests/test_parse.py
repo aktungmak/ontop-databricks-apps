@@ -48,8 +48,6 @@ from shacl.shapes import (
 )
 
 EX = Namespace("http://example.org/tpch/")
-REPO_ROOT = Path(__file__).resolve().parents[2]
-SAMPLE_SHAPES = REPO_ROOT / "mappings" / "shapes.ttl"
 
 
 def _parse(ttl: str) -> ShapesGraph:
@@ -599,30 +597,43 @@ def test_missing_sh_path_on_property_shape_raises() -> None:
         _parse(ttl)
 
 
-def test_from_file_parses_sample_tpch_shapes() -> None:
-    sg = ShapesGraph.from_file(str(SAMPLE_SHAPES))
+def test_from_file_parses_shapes(tmp_path: Path) -> None:
+    path = tmp_path / "shapes.ttl"
+    path.write_text(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+        ex:RegionShape a sh:NodeShape ;
+          sh:targetClass ex:Region ;
+          sh:property [
+            sh:path ex:regionKey ;
+            sh:datatype xsd:integer
+          ] .
+
+        ex:NationShape a sh:NodeShape ;
+          sh:targetClass ex:Nation ;
+          sh:property [
+            sh:path ex:inRegion ;
+            sh:class ex:Region ;
+            sh:nodeKind sh:IRI
+          ] .
+        """
+    )
+    sg = ShapesGraph.from_file(str(path))
 
     node_shapes = {
         ref: shape
         for ref, shape in sg.shapes.items()
         if isinstance(shape, NodeShape)
     }
-    expected_nodes = {
-        EX.RegionShape,
-        EX.NationShape,
-        EX.CustomerShape,
-        EX.SupplierShape,
-        EX.PartShape,
-        EX.PartSuppShape,
-        EX.OrderShape,
-        EX.LineItemShape,
-    }
-    assert set(node_shapes) == expected_nodes
+    assert set(node_shapes) == {EX.RegionShape, EX.NationShape}
 
     property_shapes = [
         shape for shape in sg.shapes.values() if isinstance(shape, PropertyShape)
     ]
-    assert len(property_shapes) > 0
+    assert len(property_shapes) == 2
     assert all(isinstance(shape.path, PredicatePath) for shape in property_shapes)
 
     region = node_shapes[EX.RegionShape]
