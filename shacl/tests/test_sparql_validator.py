@@ -499,3 +499,150 @@ def test_executes_node_kind_iri_or_literal_accepts_iri_and_literal() -> None:
     )
 
     assert list(graph.query(compiled.query)) == []
+
+
+@pytest.mark.parametrize(
+    ("constraint_ttl", "constraint_iri", "bound_n3", "operator"),
+    [
+        ("sh:minExclusive 0", SH.MinExclusiveConstraintComponent, '"0"^^<http://www.w3.org/2001/XMLSchema#integer>', "<"),
+        ("sh:minInclusive 0", SH.MinInclusiveConstraintComponent, '"0"^^<http://www.w3.org/2001/XMLSchema#integer>', "<="),
+        ("sh:maxExclusive 100", SH.MaxExclusiveConstraintComponent, '"100"^^<http://www.w3.org/2001/XMLSchema#integer>', ">"),
+        ("sh:maxInclusive 100", SH.MaxInclusiveConstraintComponent, '"100"^^<http://www.w3.org/2001/XMLSchema#integer>', ">="),
+    ],
+)
+def test_compiles_value_range_filters(
+    constraint_ttl: str,
+    constraint_iri,
+    bound_n3: str,
+    operator: str,
+) -> None:
+    compiled = _compile(
+        f"""
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          {constraint_ttl} .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == constraint_iri
+    query = _normalized(compiled.query)
+    assert "SELECT DISTINCT ?focus_node ?value" in query
+    assert "?focus_node <http://example.org/shacl-test/age> ?value ." in query
+    assert bound_n3 in query
+    assert f"{bound_n3} {operator} ?value" in query
+    assert "FILTER (!COALESCE(" in query
+    assert f"isNumeric({bound_n3}) && isNumeric(?value)" in query
+    assert f"datatype({bound_n3}) = datatype(?value)" in query
+
+
+def test_executes_min_exclusive_integer_bounds() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:minExclusive 0 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 1 .
+        ex:Bob a ex:Person ; ex:age 0 .
+        ex:Carol a ex:Person ; ex:age -1 .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
+        (EX.Carol, next(graph.objects(EX.Carol, EX.age))),
+    }
+
+
+def test_executes_min_inclusive_integer_bounds() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:minInclusive 0 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 1 .
+        ex:Bob a ex:Person ; ex:age 0 .
+        ex:Carol a ex:Person ; ex:age -1 .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Carol, next(graph.objects(EX.Carol, EX.age))),
+    }
+
+
+def test_executes_max_exclusive_integer_bounds() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:maxExclusive 100 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 99 .
+        ex:Bob a ex:Person ; ex:age 100 .
+        ex:Carol a ex:Person ; ex:age 101 .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
+        (EX.Carol, next(graph.objects(EX.Carol, EX.age))),
+    }
+
+
+def test_executes_max_inclusive_integer_bounds() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:maxInclusive 100 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 100 .
+        ex:Bob a ex:Person ; ex:age 101 .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
+    }
+
+
+def test_executes_min_inclusive_incomparable_values_are_violations() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:minInclusive 0 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 21 .
+        ex:Bob a ex:Person ; ex:age "twenty one" .
+        ex:Carol a ex:Person ; ex:age ex:UnknownAge .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
+        (EX.Carol, EX.UnknownAge),
+    }

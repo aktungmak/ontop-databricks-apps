@@ -58,10 +58,10 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `MinExclusiveValidator` | `sh:MinExclusiveConstraintComponent` | `sh:minExclusive` | Done | Not started |
-| `MinInclusiveValidator` | `sh:MinInclusiveConstraintComponent` | `sh:minInclusive` | Done | Not started |
-| `MaxExclusiveValidator` | `sh:MaxExclusiveConstraintComponent` | `sh:maxExclusive` | Done | Not started |
-| `MaxInclusiveValidator` | `sh:MaxInclusiveConstraintComponent` | `sh:maxInclusive` | Done | Not started |
+| `MinExclusiveValidator` | `sh:MinExclusiveConstraintComponent` | `sh:minExclusive` | Done | Done (property shapes) |
+| `MinInclusiveValidator` | `sh:MinInclusiveConstraintComponent` | `sh:minInclusive` | Done | Done (property shapes) |
+| `MaxExclusiveValidator` | `sh:MaxExclusiveConstraintComponent` | `sh:maxExclusive` | Done | Done (property shapes) |
+| `MaxInclusiveValidator` | `sh:MaxInclusiveConstraintComponent` | `sh:maxInclusive` | Done | Done (property shapes) |
 
 ### 4.4 String-based
 
@@ -114,6 +114,6 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Not started |
 | `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Not started |
 
-**29 Core validators.** SPARQL is done for 6 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`) on IRI `sh:path` property shapes only. Node-shape compilation and the remaining 23 are not started.
+**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`) on IRI `sh:path` property shapes only. Node-shape compilation and the remaining 19 are not started.
 
 `ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, `sh:property`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.

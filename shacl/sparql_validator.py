@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
-from rdflib import Literal, URIRef
+from rdflib import Literal, Node, URIRef
 from rdflib.namespace import SH
 
 from .constraint_components import (
@@ -14,7 +14,11 @@ from .constraint_components import (
     ConstraintComponent,
     DatatypeConstraintComponent,
     MaxCountConstraintComponent,
+    MaxExclusiveConstraintComponent,
+    MaxInclusiveConstraintComponent,
     MinCountConstraintComponent,
+    MinExclusiveConstraintComponent,
+    MinInclusiveConstraintComponent,
     NodeKindConstraintComponent,
     PatternConstraintComponent,
 )
@@ -182,9 +186,7 @@ class NodeKindValidator(ConstraintValidator):
         path = ctx.path.n3()
         filt = _NODEKIND_VIOLATION_FILTERS.get(constraint.nodeKind)
         if filt is None:
-            raise IllFormedShapeError(
-                f"Unknown sh:nodeKind {constraint.nodeKind}"
-            )
+            raise IllFormedShapeError(f"Unknown sh:nodeKind {constraint.nodeKind}")
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
@@ -227,6 +229,67 @@ WHERE {{
   FILTER (!REGEX(STR(?value), {pattern}{flags}))
 }}"""
         return self._query(ctx, constraint, query)
+
+
+def _range_violation_query(ctx: ViolationContext, bound: Node, operator: str) -> str:
+    path = ctx.path.n3()
+    bound_n3 = bound.n3()
+    # COALESCE turns SPARQL comparison errors into violations
+    # type guards cover rdflib treating some incomparable pairs as true (SHACL §4.3).
+    comparable = (
+        f"((isNumeric({bound_n3}) && isNumeric(?value)) "
+        f"|| (datatype({bound_n3}) = datatype(?value)))"
+    )
+    return f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  ?focus_node {path} ?value .
+  FILTER (!COALESCE({comparable} && ({bound_n3} {operator} ?value), false))
+}}"""
+
+
+@sparql_validator(MinExclusiveConstraintComponent)
+class MinExclusiveValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MinExclusiveConstraintComponent)
+        return self._query(
+            ctx, constraint, _range_violation_query(ctx, constraint.minExclusive, "<")
+        )
+
+
+@sparql_validator(MinInclusiveConstraintComponent)
+class MinInclusiveValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MinInclusiveConstraintComponent)
+        return self._query(
+            ctx, constraint, _range_violation_query(ctx, constraint.minInclusive, "<=")
+        )
+
+
+@sparql_validator(MaxExclusiveConstraintComponent)
+class MaxExclusiveValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MaxExclusiveConstraintComponent)
+        return self._query(
+            ctx, constraint, _range_violation_query(ctx, constraint.maxExclusive, ">")
+        )
+
+
+@sparql_validator(MaxInclusiveConstraintComponent)
+class MaxInclusiveValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MaxInclusiveConstraintComponent)
+        return self._query(
+            ctx, constraint, _range_violation_query(ctx, constraint.maxInclusive, ">=")
+        )
 
 
 class SparqlValidator:
