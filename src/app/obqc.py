@@ -206,12 +206,6 @@ _RULES: tuple[_Rule, ...] = (
 class OBQCChecker:
     """Prepared OBQC checker: builds the ontology side of the dataset once.
 
-    The ontology triples, their top-class entailments (:func:`_add_top_class_entailments`),
-    and the label map (:func:`_term_labels`) are identical for every query, so they are
-    materialized a single time here rather than on every :meth:`check` call — the old
-    per-call full-graph copy was the dominant cost on large ontologies. Each call only
-    inserts the small query BGP, runs the rules, and clears the BGP again.
-
     The dataset is shared mutable state and rdflib's in-memory store is not safe for
     concurrent writes. FastMCP runs the sync ``check_sparql`` tool in a worker thread pool,
     so a lock serialises the per-call mutate-and-query section.
@@ -361,7 +355,9 @@ def _add_top_class_entailments(og: Graph) -> None:
 def _class_terms(og: Graph) -> set[URIRef]:
     terms: set[URIRef] = set()
     for cls_type in (RDFS.Class, OWL.Class):
-        terms.update(s for s in og.subjects(RDF.type, cls_type) if isinstance(s, URIRef))
+        terms.update(
+            s for s in og.subjects(RDF.type, cls_type) if isinstance(s, URIRef)
+        )
     for predicate in (RDFS.domain, RDFS.range):
         terms.update(o for o in og.objects(None, predicate) if isinstance(o, URIRef))
     for subject, _, obj in og.triples((None, RDFS.subClassOf, None)):

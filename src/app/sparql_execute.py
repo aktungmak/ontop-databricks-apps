@@ -200,13 +200,9 @@ def to_sparql_json(
 def _unbound_predicate_triple(query: str) -> tuple[Node, Node, Node] | None:
     """Return the first fully-unbound-predicate BGP triple, or ``None``.
 
-    A variable predicate forces Ontop to build a UNION over every TriplesMap during
-    reformulation — the shape that walls reformulation under load. A bound IRI at either
-    endpoint lets Ontop prune that union by subject/object template, so those are allowed
-    (``<iri> ?p ?o`` describes, ``?s ?p <iri>`` reverse lookups). Only fully-unbound
-    patterns — a variable predicate with no bound IRI endpoint, e.g. ``?s ?p ?o`` and
-    unbound join chains — are flagged. Returns ``None`` when the query does not parse, so
-    Ontop surfaces its own error.
+    Fully-unbound patterns like ``?s ?p ?o`` forces Ontop to build a UNION over
+    every TriplesMap, which is not efficient so we reject queries like this.
+    Returns ``None`` when the query does not parse so Ontop surfaces its own error.
     """
     try:
         triples = extract_bgp_triples(query)
@@ -241,18 +237,12 @@ async def execute_sparql_query(
             status_code=503,
         )
 
-    # Reject fully-unbound-predicate shapes before they reach the reformulator: a variable
-    # predicate with no bound IRI endpoint forces a whole-vocabulary map union, the shape
-    # that walls reformulation under load. Either-endpoint-bound patterns (`<iri> ?p ?o`,
-    # `?s ?p <iri>`) let Ontop prune the union and are permitted.
+    # Reject fully-unbound-predicate shapes before they reach the reformulator.
     if _unbound_predicate_triple(query) is not None:
         return SparqlExecuteError(
             message=(
-                "This query uses a fully-unbound predicate (a variable predicate with no "
-                "bound IRI endpoint, e.g. `?s ?p ?o`), which forces enumeration of the "
-                "entire ontology and is rejected as too costly. Use search_ontology / "
-                "describe_iri to find concrete predicates and bind them, or bind at least "
-                "one endpoint (subject or object) to a specific IRI."
+                "This query uses a fully-unbound pattern (e.g. `?s ?p ?o`). "
+                "Bind at least one variable to a specific value."
             ),
             status_code=400,
         )

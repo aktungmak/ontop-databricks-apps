@@ -93,5 +93,5 @@ def test_execute_sparql_query_rejects_unbound_predicate_before_reformulate() -> 
 
     assert isinstance(result, SparqlExecuteError)
     assert result.status_code == 400
-    assert "unbound predicate" in result.message.lower()
+    assert "fully-unbound pattern" in result.message.lower()
     client.post.assert_not_awaited()

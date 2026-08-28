@@ -48,8 +48,6 @@ def test_sparql_permission_denied_returns_403_body() -> None:
         response = client.post(
             "/sparql",
             headers={"x-forwarded-access-token": "tok"},
-            # Bound predicate so the unbound-predicate guard does not reject this
-            # before the permission-denial path under test.
             data={"query": "SELECT ?c WHERE { ?c <ex:name> ?o }"},
         )
 

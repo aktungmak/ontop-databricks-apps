@@ -53,6 +53,7 @@ def test_permission_denied_summary_is_single_line_no_stack() -> None:
     assert "\n" not in summary
     assert "org.apache.spark" not in summary
 
+
 NATIVE_SQL = "SELECT c, name FROM books WHERE c = 'secret'"
 
 CONSTRUCT_REFORMULATE = f"""\
@@ -120,8 +121,6 @@ def test_ontop_unreachable_returns_502_without_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            # Bound predicate so the unbound-predicate guard does not short-circuit
-            # this before the reformulate call under test.
             "SELECT ?s WHERE { ?s <ex:name> ?o }",
             "tok",
             _settings(),
@@ -148,8 +147,6 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            # Bound predicate on the main pattern so the unbound-predicate guard passes
-            # and Ontop's reformulate error (mocked above) is what surfaces.
             "SELECT ?s WHERE { ?s <ex:name> ?o MINUS { ?s a ?t } }",
             "tok",
             _settings(),
