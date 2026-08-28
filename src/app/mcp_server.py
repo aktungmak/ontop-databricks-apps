@@ -12,12 +12,25 @@ from fastmcp.server.dependencies import get_http_headers
 
 from config import Settings
 from obo import MISSING_USER_TOKEN, token_from_headers
-from obqc import check_sparql as obqc_check_sparql
 from ontology_store import OntologyStore
 from ontop_manager import OntopProcessManager
 from sparql_execute import SparqlExecuteError, execute_sparql_query
 
-mcp = FastMCP("TBox Toolbox")
+mcp = FastMCP(
+    "TBox Toolbox",
+    instructions=(
+        "Tools over an Ontop virtual knowledge graph (SPARQL is reformulated to SQL). "
+        "Work discovery-first: use search_ontology and describe_iri to find the exact "
+        "classes and properties, then build SPARQL only from IRIs those tools returned. "
+        "If search_ontology returns `# No matches`, do not invent a query against guessed "
+        "terms — search again with different words, or stop and say the term is not in the "
+        "ontology. Avoid fully-unbound triple patterns like `?s ?p ?o` (a variable "
+        "predicate with no bound IRI endpoint): they force enumeration of the whole "
+        "ontology and are rejected. If you need a variable predicate, bind at least one "
+        "endpoint to a concrete IRI and prefer concrete predicates from discovery. Prefer "
+        "check_sparql before execute_sparql."
+    ),
+)
 
 _ONTOLOGY_MISSING_MESSAGE = (
     "SPARQL ontology checks cannot run since the ontology is not loaded."
@@ -93,7 +106,9 @@ def health() -> dict[str, Any]:
 def search_ontology(query: str, limit: int = 10) -> str:
     """Fuzzy-search ontology terms by label/comment and return matching Turtle.
 
-    Prefer this (and ``describe_iri``) before drafting SPARQL.
+    Prefer this (and ``describe_iri``) before drafting SPARQL. If the result is
+    ``# No matches``, do not fabricate SPARQL against guessed terms — search again
+    with different words, or stop; only build queries from IRIs returned here.
     """
     return _require_runtime().ontology_store.search(query, limit=limit)
 
@@ -120,13 +135,14 @@ def check_sparql(query: str) -> dict[str, Any]:
     ``ontology_available: false``.
     """
     store = _require_runtime().ontology_store
-    if not store.is_available() or store.graph is None:
+    checker = store.obqc_checker
+    if not store.is_available() or checker is None:
         return {
             "ok": False,
             "ontology_available": False,
             "message": _ONTOLOGY_MISSING_MESSAGE,
         }
-    result = obqc_check_sparql(query, store.graph)
+    result = checker.check(query)
     return {"ontology_available": True, **result}
 
 
@@ -140,6 +156,12 @@ async def execute_sparql(query: str) -> dict[str, Any]:
     MCP result is flagged ``isError`` and cannot be mistaken for a result. A
     successful query with zero matches is NOT an error: it returns normally with an
     empty ``bindings`` array.
+
+    Prefer concrete predicate IRIs from the ontology. A fully-unbound triple pattern —
+    a variable predicate with no bound IRI endpoint (e.g. ``?s ?p ?o``) — forces
+    whole-vocabulary enumeration, walls the reformulator, and is rejected. If you need a
+    variable predicate, bind at least one endpoint to a concrete IRI (``<iri> ?p ?o`` or
+    ``?s ?p <iri>``) and use ``search_ontology`` / ``describe_iri`` to find predicates.
 
     Full-native reformulation has limits (e.g. some OPTIONAL/BIND shapes,
     property paths, SERVICE, Update). Consider limiting the size of results

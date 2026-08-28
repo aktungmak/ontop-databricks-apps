@@ -120,7 +120,9 @@ def test_ontop_unreachable_returns_502_without_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            "SELECT ?s WHERE { ?s ?p ?o }",
+            # Bound predicate so the unbound-predicate guard does not short-circuit
+            # this before the reformulate call under test.
+            "SELECT ?s WHERE { ?s <ex:name> ?o }",
             "tok",
             _settings(),
             client,
@@ -146,7 +148,9 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            "SELECT ?s WHERE { ?s ?p ?o MINUS { ?s a ?t } }",
+            # Bound predicate on the main pattern so the unbound-predicate guard passes
+            # and Ontop's reformulate error (mocked above) is what surfaces.
+            "SELECT ?s WHERE { ?s <ex:name> ?o MINUS { ?s a ?t } }",
             "tok",
             _settings(),
             client,

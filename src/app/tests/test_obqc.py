@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 from pathlib import Path
 
 from rdflib import Graph, Literal, Namespace
 from rdflib.namespace import OWL, RDF, RDFS, XSD
 
-from obqc import check_sparql, extract_bgp_triples
+from obqc import OBQCChecker, check_sparql, extract_bgp_triples
 
 EX = Namespace("http://example.org/tpch/")
 IN = Namespace("http://example.org/insurance/")
@@ -245,3 +246,44 @@ def test_extract_bgp_includes_optional() -> None:
     preds = {str(p) for _, p, _ in triples}
     assert str(EX.placedBy) in preds
     assert str(RDF.type) in preds
+
+
+def test_concurrent_checks_are_consistent() -> None:
+    """A single cached OBQCChecker is shared across FastMCP worker threads.
+
+    Concurrent ``check`` calls must not corrupt the shared dataset or bleed one call's
+    query BGP into another's result. Each thread's result must match the single-threaded
+    baseline for the query it ran.
+    """
+    checker = OBQCChecker(_insurance_ontology())
+
+    bad_query = """
+    PREFIX in: <http://example.org/insurance/>
+    PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+    SELECT ?agent ?policy WHERE {
+      ?agent in:soldByAgent ?policy .
+      ?agent rdf:type in:Agent .
+    }
+    """
+    good_query = """
+    PREFIX in: <http://example.org/insurance/>
+    SELECT ?policy ?agent WHERE {
+      ?policy a in:Policy .
+      ?agent a in:Agent .
+      ?policy in:soldByAgent ?agent .
+    }
+    """
+    bad_expected = checker.check(bad_query)
+    good_expected = checker.check(good_query)
+    assert bad_expected["ok"] is False
+    assert good_expected == {"ok": True, "violations": []}
+
+    def run(i: int) -> dict:
+        return checker.check(bad_query if i % 2 == 0 else good_query)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        results = list(pool.map(run, range(64)))
+
+    for i, result in enumerate(results):
+        expected = bad_expected if i % 2 == 0 else good_expected
+        assert result == expected, f"thread {i} result diverged: {result}"

@@ -8,6 +8,7 @@ Callers are expected to handle repairs based on the violations.
 from __future__ import annotations
 
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -202,6 +203,65 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 
+class OBQCChecker:
+    """Prepared OBQC checker: builds the ontology side of the dataset once.
+
+    The ontology triples, their top-class entailments (:func:`_add_top_class_entailments`),
+    and the label map (:func:`_term_labels`) are identical for every query, so they are
+    materialized a single time here rather than on every :meth:`check` call — the old
+    per-call full-graph copy was the dominant cost on large ontologies. Each call only
+    inserts the small query BGP, runs the rules, and clears the BGP again.
+
+    The dataset is shared mutable state and rdflib's in-memory store is not safe for
+    concurrent writes. FastMCP runs the sync ``check_sparql`` tool in a worker thread pool,
+    so a lock serialises the per-call mutate-and-query section.
+    """
+
+    def __init__(self, ontology: Graph) -> None:
+        dataset = Dataset()
+        self._query_graph = dataset.graph(identifier=QUERY_GRAPH)
+        ontology_graph = dataset.graph(identifier=ONTOLOGY_GRAPH)
+        for triple in ontology:
+            ontology_graph.add(triple)
+        _add_top_class_entailments(ontology_graph)
+        self._dataset = dataset
+        self._labels = _term_labels(ontology)
+        self._lock = threading.Lock()
+
+    def check(self, query: str) -> dict[str, Any]:
+        """Check ``query`` against the prepared ontology; see :func:`check_sparql`."""
+        try:
+            bgp_triples = extract_bgp_triples(query)
+        except Exception as exc:
+            logger.debug("OBQC SPARQL parse failed: %s", exc)
+            return {
+                "ok": False,
+                "violations": [
+                    {
+                        "rule": "parse_error",
+                        "message": f"Could not parse SPARQL query: {exc}",
+                    }
+                ],
+            }
+
+        query_graph = materialize_bgp(bgp_triples)
+        with self._lock:
+            self._query_graph.remove((None, None, None))
+            for triple in query_graph:
+                self._query_graph.add(triple)
+            violations: list[dict[str, Any]] = [
+                _format_violation(rule, binding, self._labels)
+                for rule in _RULES
+                for binding in _run_rule(self._dataset, rule)
+            ]
+            self._query_graph.remove((None, None, None))
+
+        return {
+            "ok": len(violations) == 0,
+            "violations": violations,
+        }
+
+
 def check_sparql(query: str, ontology: Graph) -> dict[str, Any]:
     """Check a SPARQL query against an ontology using OBQC body rules.
 
@@ -211,35 +271,11 @@ def check_sparql(query: str, ontology: Graph) -> dict[str, Any]:
 
     Returns:
         Result dict with ``ok`` and ``violations``.
+
+    Convenience one-shot wrapper. Long-lived callers should build an
+    :class:`OBQCChecker` once and reuse it so the ontology side is not rebuilt per query.
     """
-    try:
-        bgp_triples = extract_bgp_triples(query)
-    except Exception as exc:
-        logger.debug("OBQC SPARQL parse failed: %s", exc)
-        return {
-            "ok": False,
-            "violations": [
-                {
-                    "rule": "parse_error",
-                    "message": f"Could not parse SPARQL query: {exc}",
-                }
-            ],
-        }
-
-    query_graph = materialize_bgp(bgp_triples)
-    dataset = _build_conjunctive_dataset(query_graph, ontology)
-    labels = _term_labels(ontology)
-
-    violations: list[dict[str, Any]] = [
-        _format_violation(rule, binding, labels)
-        for rule in _RULES
-        for binding in _run_rule(dataset, rule)
-    ]
-
-    return {
-        "ok": len(violations) == 0,
-        "violations": violations,
-    }
+    return OBQCChecker(ontology).check(query)
 
 
 def extract_bgp_triples(query: str) -> list[tuple[Node, Node, Node]]:
@@ -300,18 +336,6 @@ def _skolemize(term: Node) -> Identifier:
     if isinstance(term, BNode):
         return URIRef(f"{QQ}b_{term}")
     return term  # type: ignore[return-value]
-
-
-def _build_conjunctive_dataset(query_graph: Graph, ontology: Graph) -> Dataset:
-    ds = Dataset()
-    qg = ds.graph(identifier=QUERY_GRAPH)
-    og = ds.graph(identifier=ONTOLOGY_GRAPH)
-    for triple in query_graph:
-        qg.add(triple)
-    for triple in ontology:
-        og.add(triple)
-    _add_top_class_entailments(og)
-    return ds
 
 
 def _add_top_class_entailments(og: Graph) -> None:
