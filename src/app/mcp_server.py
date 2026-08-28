@@ -12,12 +12,21 @@ from fastmcp.server.dependencies import get_http_headers
 
 from config import Settings
 from obo import MISSING_USER_TOKEN, token_from_headers
-from obqc import check_sparql as obqc_check_sparql
 from ontology_store import OntologyStore
 from ontop_manager import OntopProcessManager
 from sparql_execute import SparqlExecuteError, execute_sparql_query
 
-mcp = FastMCP("TBox Toolbox")
+mcp = FastMCP(
+    "TBox Toolbox",
+    instructions=(
+        "Start with discovery: use search_ontology and describe_iri to find the classes and "
+        "properties relevant to your query, then build SPARQL only from IRIs those tools return. "
+        "If search_ontology returns `# No matches`, do not invent a query against guessed terms. "
+        "Instead, search again with different words, or stop and say the term is not in the ontology. "
+        "Fully-unbound triple patterns like `?s ?p ?o` are rejected, at least one compnent must be bound. "
+        "Use check_sparql before execute_sparql to ensure the query is valid."
+    ),
+)
 
 _ONTOLOGY_MISSING_MESSAGE = (
     "SPARQL ontology checks cannot run since the ontology is not loaded."
@@ -36,9 +45,8 @@ class McpAuthError(Exception):
 def get_mcp_user_token() -> str:
     """Return ``x-forwarded-access-token`` from the active MCP HTTP request.
 
-    Uses the same token extraction as :func:`obo.get_user_token`. Raises
-    :class:`McpAuthError` when the header is missing (MCP tools should not
-    raise FastAPI ``HTTPException``).
+    Raises :class:`McpAuthError` when the header is missing (MCP tools should
+    not raise FastAPI ``HTTPException``).
     """
 
     token = token_from_headers(get_http_headers())
@@ -76,8 +84,8 @@ def _require_runtime() -> McpRuntime:
 def health() -> dict[str, Any]:
     """Report Ontop process status and whether the TBox ontology cache is loaded.
 
-    Discovery and ``check_sparql`` need a loaded ontology; ``execute_sparql`` needs
-    Ontop running (and a user token from Databricks Apps).
+    Discovery and ``check_sparql`` need a loaded ontology.
+    ``execute_sparql`` only needs Ontop running (and a user token from Databricks Apps).
     """
     runtime = _require_runtime()
     ontop_running = runtime.ontop_manager.is_running
@@ -93,7 +101,10 @@ def health() -> dict[str, Any]:
 def search_ontology(query: str, limit: int = 10) -> str:
     """Fuzzy-search ontology terms by label/comment and return matching Turtle.
 
-    Prefer this (and ``describe_iri``) before drafting SPARQL.
+    Prefer this (and ``describe_iri``) before drafting SPARQL. If the result is
+    ``# No matches``, do not fabricate SPARQL against guessed terms — search again
+    with different words, or stop.
+    Only build queries from IRIs returned here.
     """
     return _require_runtime().ontology_store.search(query, limit=limit)
 
@@ -103,9 +114,8 @@ def describe_iri(iri: str) -> str:
     """Describe one ontology term as a focused Turtle neighborhood.
 
     ``iri`` must be a full IRI (e.g. ``http://example.org/tpch/placedBy``).
-    Prefixed names and bare local names are not accepted — use
-    ``search_ontology`` first if you only have a label or local name.
-    Uses the cached TBox only.
+    Prefixed names and bare local names are not accepted.
+    Use ``search_ontology`` first if you only have a label or local name.
     """
     return _require_runtime().ontology_store.describe(iri)
 
@@ -114,19 +124,18 @@ def describe_iri(iri: str) -> str:
 def check_sparql(query: str) -> dict[str, Any]:
     """Run Ontology-Based Query Check (OBQC) against the cached TBox.
 
-    Stateless RDFS consistency checks (domain/range/property). Prefer calling
-    this before ``execute_sparql`` and rewrite using violation messages. Does
-    not hit the Virtual Knowledge Graph. If the ontology is not loaded, returns
-    ``ontology_available: false``.
+    Low-latency stateless RDFS consistency checks (domain/range/property).
+    Prefer calling this before ``execute_sparql`` and rewrite using violation messages.
     """
     store = _require_runtime().ontology_store
-    if not store.is_available() or store.graph is None:
+    checker = store.obqc_checker
+    if not store.is_available() or checker is None:
         return {
             "ok": False,
             "ontology_available": False,
             "message": _ONTOLOGY_MISSING_MESSAGE,
         }
-    result = obqc_check_sparql(query, store.graph)
+    result = checker.check(query)
     return {"ontology_available": True, **result}
 
 
@@ -135,26 +144,25 @@ async def execute_sparql(query: str) -> dict[str, Any]:
     """Execute a SPARQL query against the Virtual Knowledge Graph returning
     results in SPARQL JSON format.
 
-    Prefer ``check_sparql`` first. On ANY failure — missing auth, reformulation
-    error, or a warehouse SQL/permission error — this raises a ``ToolError`` so the
-    MCP result is flagged ``isError`` and cannot be mistaken for a result. A
-    successful query with zero matches is NOT an error: it returns normally with an
+    Prefer ``check_sparql`` first. On ANY failure the MCP result is flagged ``isError``.
+    A successful query with zero matches is NOT an error: it returns normally with an
     empty ``bindings`` array.
 
+    A fully-unbound triple pattern ``?s ?p ?o`` will be rejected.
+
     Full-native reformulation has limits (e.g. some OPTIONAL/BIND shapes,
-    property paths, SERVICE, Update). Consider limiting the size of results
-    to keep the context clean.
+    property paths, SERVICE, Update).
+
+    Consider limiting the size of results to keep the context clean.
 
     Do not nest OPTIONAL inside OPTIONAL: a variable bound only in the inner
     block has no inferable type ("could not infer the unique type of its
     variable X"). Keep OPTIONAL blocks as siblings at one level, merging the
     inner triple patterns into the outer block where the data permits.
 
-    Avoid GROUP_CONCAT: it maps to Spark ``listagg``, which fails on the
-    warehouse (``AttributeReference cannot be cast to SortOrder``). To show
-    the members of a group, either add the variable to GROUP BY for one row
-    per member, or run a second query. SUM, COUNT, COUNT(DISTINCT), MIN and
-    MAX over numbers and strings are safe.
+    Avoid GROUP_CONCAT.  To show the members of a group, either add the variable
+    to GROUP BY for one row per member, or run a second query.
+    SUM, COUNT, COUNT(DISTINCT), MIN and MAX over numbers and strings are safe.
     """
     runtime = _require_runtime()
 

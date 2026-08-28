@@ -9,6 +9,8 @@ from pathlib import Path
 from rdflib import OWL, RDF, RDFS, Graph, Literal, URIRef
 from rapidfuzz import fuzz, process
 
+from obqc import OBQCChecker
+
 logger = logging.getLogger(__name__)
 
 _NOT_LOADED = (
@@ -57,6 +59,8 @@ class OntologyStore:
         self._available = False
         # IRI → label/comment strings (and full-IRI fallbacks), matched independently
         self._iri_to_texts: dict[str, list[str]] = {}
+        # Prepared OBQC checker, built once from the loaded graph (see load()).
+        self._obqc_checker: OBQCChecker | None = None
 
     @classmethod
     def load(cls, path: Path | str | None) -> OntologyStore:
@@ -81,6 +85,8 @@ class OntologyStore:
         store._graph = graph
         store._available = True
         store._build_search_index()
+        # Build the ontology side of the OBQC dataset once; reused across check_sparql calls.
+        store._obqc_checker = OBQCChecker(graph)
         logger.info(
             "OntologyStore: loaded %s (%d triples, %d searchable terms)",
             ontology_path,
@@ -96,6 +102,11 @@ class OntologyStore:
     def graph(self) -> Graph | None:
         """In-memory rdflib graph when loaded; ``None`` if unavailable."""
         return self._graph
+
+    @property
+    def obqc_checker(self) -> OBQCChecker | None:
+        """Prepared OBQC checker built once from the ontology; ``None`` if unavailable."""
+        return self._obqc_checker
 
     def search(self, query: str, limit: int = 10) -> str:
         if not self._available or self._graph is None:

@@ -53,6 +53,7 @@ def test_permission_denied_summary_is_single_line_no_stack() -> None:
     assert "\n" not in summary
     assert "org.apache.spark" not in summary
 
+
 NATIVE_SQL = "SELECT c, name FROM books WHERE c = 'secret'"
 
 CONSTRUCT_REFORMULATE = f"""\
@@ -120,7 +121,7 @@ def test_ontop_unreachable_returns_502_without_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            "SELECT ?s WHERE { ?s ?p ?o }",
+            "SELECT ?s WHERE { ?s <ex:name> ?o }",
             "tok",
             _settings(),
             client,
@@ -146,7 +147,7 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
 
     result = asyncio.run(
         execute_sparql_query(
-            "SELECT ?s WHERE { ?s ?p ?o MINUS { ?s a ?t } }",
+            "SELECT ?s WHERE { ?s <ex:name> ?o MINUS { ?s a ?t } }",
             "tok",
             _settings(),
             client,

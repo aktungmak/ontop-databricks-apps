@@ -15,9 +15,11 @@ from urllib.parse import urlencode
 
 import httpx
 from databricks.sql.exc import Error as DbsqlError, RequestError
+from rdflib.term import Node, URIRef, Variable
 
 from config import Settings
 from obo import get_workspace_host
+from obqc import extract_bgp_triples
 from ontop_manager import OntopProcessManager
 
 logger = logging.getLogger(__name__)
@@ -195,6 +197,27 @@ def to_sparql_json(
     return {"head": {"vars": columns}, "results": {"bindings": bindings}}
 
 
+def _unbound_predicate_triple(query: str) -> tuple[Node, Node, Node] | None:
+    """Return the first fully-unbound-predicate BGP triple, or ``None``.
+
+    Fully-unbound patterns like ``?s ?p ?o`` forces Ontop to build a UNION over
+    every TriplesMap, which is not efficient so we reject queries like this.
+    Returns ``None`` when the query does not parse so Ontop surfaces its own error.
+    """
+    try:
+        triples = extract_bgp_triples(query)
+    except Exception:
+        return None
+    for s, p, o in triples:
+        if (
+            isinstance(p, Variable)
+            and not isinstance(s, URIRef)
+            and not isinstance(o, URIRef)
+        ):
+            return (s, p, o)
+    return None
+
+
 async def execute_sparql_query(
     query: str,
     token: str,
@@ -212,6 +235,16 @@ async def execute_sparql_query(
         return SparqlExecuteError(
             message="Ontop is not running",
             status_code=503,
+        )
+
+    # Reject fully-unbound-predicate shapes before they reach the reformulator.
+    if _unbound_predicate_triple(query) is not None:
+        return SparqlExecuteError(
+            message=(
+                "This query uses a fully-unbound pattern (e.g. `?s ?p ?o`). "
+                "Bind at least one variable to a specific value."
+            ),
+            status_code=400,
         )
 
     target = f"http://127.0.0.1:{settings.ontop_internal_port}/ontop/reformulate"

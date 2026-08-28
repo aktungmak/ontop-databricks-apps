@@ -7,6 +7,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
+from fastmcp.exceptions import ToolError
 
 from config import Settings
 from mcp_server import (
@@ -86,12 +88,9 @@ def test_execute_sparql_maps_error_without_sql() -> None:
             ),
         ) as exec_mock,
     ):
-        result = asyncio.run(execute_sparql("SELECT * WHERE { ?s ?p ?o }"))
+        with pytest.raises(ToolError, match=r"\(400\): Unsupported SPARQL feature: MINUS"):
+            asyncio.run(execute_sparql("SELECT * WHERE { ?s ?p ?o }"))
 
-    assert isinstance(result, str)
-    assert "Error (400)" in result
-    assert "MINUS" in result
-    assert "SELECT c FROM" not in result
     exec_mock.assert_awaited_once()
     # Must call shared module with query string (not HTTP to /sparql).
     assert exec_mock.await_args.args[0] == "SELECT * WHERE { ?s ?p ?o }"
@@ -117,7 +116,7 @@ def test_execute_sparql_returns_json_on_success() -> None:
     assert result == payload
 
 
-def test_execute_sparql_permission_denied_returns_403_string() -> None:
+def test_execute_sparql_permission_denied_raises_403() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     manager = MagicMock()
     manager.is_running = True
@@ -137,12 +136,13 @@ def test_execute_sparql_permission_denied_returns_403_string() -> None:
             ),
         ),
     ):
-        result = asyncio.run(execute_sparql("SELECT ?s WHERE { ?s ?p ?o }"))
+        with pytest.raises(ToolError) as exc_info:
+            asyncio.run(execute_sparql("SELECT ?s WHERE { ?s ?p ?o }"))
 
-    assert isinstance(result, str)
-    assert result.startswith("Error (403)")
-    assert "You lack Unity Catalog access" in result
-    assert "org.apache.spark" not in result
+    message = str(exc_info.value)
+    assert message.startswith("(403):")
+    assert "You lack Unity Catalog access" in message
+    assert "org.apache.spark" not in message
 
 
 def test_check_sparql_unavailable_ontology() -> None:

@@ -48,7 +48,7 @@ def test_sparql_permission_denied_returns_403_body() -> None:
         response = client.post(
             "/sparql",
             headers={"x-forwarded-access-token": "tok"},
-            data={"query": "SELECT ?c WHERE { ?c ?p ?o }"},
+            data={"query": "SELECT ?c WHERE { ?c <ex:name> ?o }"},
         )
 
     assert response.status_code == 403
