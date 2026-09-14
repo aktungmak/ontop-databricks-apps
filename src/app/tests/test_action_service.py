@@ -81,6 +81,15 @@ async def _test_subject_checker(subject_iri, class_iri, token, timeout_seconds):
     return True
 
 
+def _external_result(parameters, status="COMPLETED", **values):
+    return {
+        "status": status,
+        "invocation_id": parameters["invocation_id"],
+        "request_hash": parameters["request_hash"],
+        **values,
+    }
+
+
 def _service(
     sql_runner,
     audit_recorder=lambda row, token, timeout_seconds=None: "audit",
@@ -116,6 +125,7 @@ def _external_service(
     actor_resolver=_test_actor_resolver,
     bound_class_iri="https://example.com/ontology#SourcingBundle",
     subject_checker=_test_subject_checker,
+    idempotency_strategy="REQUEST_KEY",
 ) -> ActionService:
     action = ActionDefinition(
         iri="https://example.com/ontology#createPurchaseOrder",
@@ -125,6 +135,7 @@ def _external_service(
         function_fqn="cat.sch.create_purchase_order",
         status="PUBLISHED",
         input_schema={"quantity": "integer"},
+        idempotency_strategy=idempotency_strategy,
     )
     return ActionService(
         catalog=ActionCatalog(available=True, actions=[action]),
@@ -321,7 +332,7 @@ def test_confirm_external_invokes_uc_function_with_user_token():
     service = _external_service(
         sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters))
-            or (["result"], [({"status": "COMPLETED"},)])
+            or (["result"], [(_external_result(parameters),)])
         )
     )
     prepared = asyncio.run(
@@ -495,6 +506,227 @@ def test_prepare_requires_idempotency_key_for_request_key_actions():
     ]
 
 
+def test_repeated_prepare_converges_on_one_external_invocation():
+    function_calls = []
+
+    def runner(sql, token, settings, parameters=None, **_):
+        function_calls.append(parameters)
+        return ["result"], [
+            (
+                {
+                    "status": "COMPLETED",
+                    "invocation_id": parameters.get("invocation_id"),
+                    "request_hash": parameters.get("request_hash"),
+                },
+            )
+        ]
+
+    service = _external_service(runner)
+    request = PrepareActionRequest(
+        action_iri="https://example.com/ontology#createPurchaseOrder",
+        subject_iri="https://example.com/ontology/SourcingBundle/B1",
+        params={"quantity": 2},
+        idempotency_key=" request-1 ",
+    )
+
+    first = asyncio.run(service.prepare(request, token="user-token"))
+    second = asyncio.run(service.prepare(request, token="user-token"))
+    first_payload = PrepareTokenSigner("secret").verify(first.preparation_token)
+    second_payload = PrepareTokenSigner("secret").verify(second.preparation_token)
+
+    assert first.prepare_id == second.prepare_id
+    assert first_payload.invocation_id == second_payload.invocation_id
+    assert first_payload.invocation_id.startswith("v1:")
+    assert first_payload.request_hash == second_payload.request_hash
+
+    first_result = asyncio.run(
+        service.confirm(
+            ConfirmActionRequest(preparation_token=first.preparation_token),
+            token="user-token",
+        )
+    )
+    second_result = asyncio.run(
+        service.confirm(
+            ConfirmActionRequest(preparation_token=second.preparation_token),
+            token="user-token",
+        )
+    )
+
+    assert first_result == second_result
+    assert len(function_calls) == 1
+
+
+def test_prepare_rejects_request_key_reuse_with_different_payload():
+    service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], [])
+    )
+    original = PrepareActionRequest(
+        action_iri="https://example.com/ontology#createPurchaseOrder",
+        subject_iri="https://example.com/ontology/SourcingBundle/B1",
+        params={"quantity": 2},
+        idempotency_key="request-1",
+    )
+    conflicting = original.model_copy(update={"params": {"quantity": 3}})
+
+    asyncio.run(service.prepare(original, token="user-token"))
+
+    with pytest.raises(ActionConflictError, match="idempotency key"):
+        asyncio.run(service.prepare(conflicting, token="user-token"))
+
+
+def test_two_replicas_share_target_enforced_invocation_identity():
+    stored_results = {}
+    side_effect_count = 0
+    target_lock = threading.Lock()
+
+    def target(sql, token, settings, parameters=None, **_):
+        nonlocal side_effect_count
+        invocation_id = parameters["invocation_id"]
+        request_hash = parameters["request_hash"]
+        with target_lock:
+            stored = stored_results.get(invocation_id)
+            if stored is None:
+                side_effect_count += 1
+                stored = _external_result(
+                    parameters,
+                    external_request_id="PO-1",
+                )
+                stored_results[invocation_id] = stored
+            elif stored["request_hash"] != request_hash:
+                stored = _external_result(
+                    parameters,
+                    status="CONFLICT",
+                    message="invocation request hash changed",
+                )
+        return ["result"], [(stored,)]
+
+    first_service = _external_service(target)
+    second_service = _external_service(target)
+    request = PrepareActionRequest(
+        action_iri="https://example.com/ontology#createPurchaseOrder",
+        subject_iri="https://example.com/ontology/SourcingBundle/B1",
+        params={"quantity": 2},
+        idempotency_key="request-1",
+    )
+    first_prepared = asyncio.run(first_service.prepare(request, token="user-token"))
+    second_prepared = asyncio.run(second_service.prepare(request, token="user-token"))
+    results = []
+
+    def confirm(service, preparation_token):
+        results.append(
+            asyncio.run(
+                service.confirm(
+                    ConfirmActionRequest(preparation_token=preparation_token),
+                    token="user-token",
+                )
+            )
+        )
+
+    threads = [
+        threading.Thread(
+            target=confirm,
+            args=(first_service, first_prepared.preparation_token),
+        ),
+        threading.Thread(
+            target=confirm,
+            args=(second_service, second_prepared.preparation_token),
+        ),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert first_prepared.prepare_id == second_prepared.prepare_id
+    assert len(results) == 2
+    assert results[0].result == results[1].result
+    assert side_effect_count == 1
+    assert len(stored_results) == 1
+
+
+def test_repeated_prepare_after_restart_reuses_persisted_preparation():
+    store = _AuditStore()
+    request = PrepareActionRequest(
+        action_iri="https://example.com/ontology#createPurchaseOrder",
+        subject_iri="https://example.com/ontology/SourcingBundle/B1",
+        params={"quantity": 2},
+        idempotency_key="request-1",
+    )
+    first_service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], []),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+    )
+    first = asyncio.run(first_service.prepare(request, token="user-token"))
+    restarted = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], []),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+    )
+
+    repeated = asyncio.run(restarted.prepare(request, token="user-token"))
+
+    assert repeated.prepare_id == first.prepare_id
+    assert repeated.preview == first.preview
+    assert [
+        record
+        for record in store.records
+        if record.row.phase == "PREPARE" and record.row.status == "PREPARED"
+    ] == [store.records[0]]
+
+
+def test_external_result_must_echo_invocation_and_request_hashes():
+    service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: (
+            ["result"],
+            [({"status": "COMPLETED"},)],
+        )
+    )
+    prepared = asyncio.run(
+        service.prepare(
+            PrepareActionRequest(
+                action_iri="https://example.com/ontology#createPurchaseOrder",
+                subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                params={"quantity": 2},
+                idempotency_key="request-1",
+            ),
+            token="user-token",
+        )
+    )
+
+    with pytest.raises(ActionUnavailableError, match="idempotency envelope"):
+        asyncio.run(
+            service.confirm(
+                ConfirmActionRequest(preparation_token=prepared.preparation_token),
+                token="user-token",
+            )
+        )
+
+
+def test_published_external_action_rejects_unknown_idempotency_strategy():
+    service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], []),
+        idempotency_strategy="BEST_EFFORT",
+    )
+
+    with pytest.raises(ActionReadOnlyError) as error:
+        asyncio.run(
+            service.prepare(
+                PrepareActionRequest(
+                    action_iri="https://example.com/ontology#createPurchaseOrder",
+                    subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                    params={"quantity": 2},
+                    idempotency_key="request-1",
+                ),
+                token="user-token",
+            )
+        )
+
+    assert "UNSUPPORTED_IDEMPOTENCY_STRATEGY" in error.value.reason_codes
+
+
 def test_failed_prepare_read_writes_failure_audit():
     audit_rows = []
     service = _service(
@@ -521,7 +753,7 @@ def test_repeated_external_confirm_returns_recorded_result_without_reinvocation(
     def runner(sql, token, settings, parameters=None, **_):
         nonlocal invocations
         invocations += 1
-        return ["result"], [({"status": "COMPLETED", "external_request_id": "PO-1"},)]
+        return ["result"], [(_external_result(parameters, external_request_id="PO-1"),)]
 
     service = _external_service(
         runner,
@@ -555,7 +787,18 @@ def test_repeated_external_confirm_after_restart_uses_audit_outcome():
     service = _external_service(
         lambda sql, token, settings, parameters=None, **_: (
             calls.append(sql)
-            or (["result"], [({"status": "SUCCESS", "external_request_id": "PO-1"},)])
+            or (
+                ["result"],
+                [
+                    (
+                        _external_result(
+                            parameters,
+                            status="SUCCESS",
+                            external_request_id="PO-1",
+                        ),
+                    )
+                ],
+            )
         ),
         audit_recorder=store.record,
         audit_lookup=store.prepared,
@@ -589,6 +832,54 @@ def test_repeated_external_confirm_after_restart_uses_audit_outcome():
     assert len(calls) == 1
 
 
+def test_confirmation_replay_rejects_history_with_different_request_hashes():
+    store = _AuditStore()
+    function_calls = []
+    service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: (
+            function_calls.append(sql)
+            or (["result"], [(_external_result(parameters),)])
+        ),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+    )
+    prepared = asyncio.run(
+        service.prepare(
+            PrepareActionRequest(
+                action_iri="https://example.com/ontology#createPurchaseOrder",
+                subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                params={"quantity": 2},
+                idempotency_key="request-1",
+            ),
+            token="user-token",
+        )
+    )
+    store.records.append(
+        ActionAuditRecord(
+            audit_id="audit_conflicting_result",
+            row=replace(
+                store.records[0].row,
+                phase="CONFIRM",
+                status="COMPLETED",
+                params_hash="different-request",
+                result_json='{"status":"COMPLETED"}',
+            ),
+            effective_user="user@example.com",
+        )
+    )
+
+    with pytest.raises(ActionConflictError, match="audit does not match"):
+        asyncio.run(
+            service.confirm(
+                ConfirmActionRequest(preparation_token=prepared.preparation_token),
+                token="user-token",
+            )
+        )
+
+    assert function_calls == []
+
+
 def test_concurrent_external_confirms_execute_once_in_process():
     store = _AuditStore()
     invocation_count = 0
@@ -599,7 +890,7 @@ def test_concurrent_external_confirms_execute_once_in_process():
         with invocation_lock:
             invocation_count += 1
         time.sleep(0.05)
-        return ["result"], [({"status": "COMPLETED"},)]
+        return ["result"], [(_external_result(parameters),)]
 
     service = _external_service(
         runner,
@@ -641,7 +932,15 @@ def test_external_failure_envelope_is_audited_and_returned(envelope_status):
     service = _external_service(
         lambda sql, token, settings, parameters=None, **_: (
             ["result"],
-            [({"status": envelope_status, "message": "upstream refused"},)],
+            [
+                (
+                    _external_result(
+                        parameters,
+                        status=envelope_status,
+                        message="upstream refused",
+                    ),
+                )
+            ],
         ),
         audit_recorder=lambda row, token, timeout_seconds=None: (
             audit_rows.append(row) or f"audit_{len(audit_rows)}"
@@ -674,8 +973,21 @@ def test_external_failure_envelope_is_audited_and_returned(envelope_status):
 @pytest.mark.parametrize("result", [{}, {"status": "WAITING"}, "not-an-envelope"])
 def test_external_malformed_or_unknown_envelope_fails_closed(result):
     audit_rows = []
+
+    def runner(sql, token, settings, parameters=None, **_):
+        envelope = (
+            {
+                **result,
+                "invocation_id": parameters["invocation_id"],
+                "request_hash": parameters["request_hash"],
+            }
+            if isinstance(result, dict)
+            else result
+        )
+        return ["result"], [(envelope,)]
+
     service = _external_service(
-        lambda sql, token, settings, parameters=None, **_: (["result"], [(result,)]),
+        runner,
         audit_recorder=lambda row, token, timeout_seconds=None: (
             audit_rows.append(row) or f"audit_{len(audit_rows)}"
         ),
@@ -692,7 +1004,7 @@ def test_external_malformed_or_unknown_envelope_fails_closed(result):
         )
     )
 
-    with pytest.raises(ActionUnavailableError, match="invalid result envelope"):
+    with pytest.raises(ActionUnavailableError, match="invalid .* envelope"):
         asyncio.run(
             service.confirm(
                 ConfirmActionRequest(preparation_token=prepared.preparation_token),
@@ -755,6 +1067,40 @@ def test_confirm_rejects_audit_data_that_does_not_match_signed_hashes():
     )
     restarted = _service(
         lambda sql, token, settings, parameters=None, **_: (["old_value"], [("old",)]),
+        audit_lookup=lambda prepare_id, token, timeout_seconds=None: tampered,
+    )
+
+    with pytest.raises(ActionConflictError, match="does not match"):
+        asyncio.run(
+            restarted.confirm(
+                ConfirmActionRequest(preparation_token=prepared.preparation_token),
+                token="user-token",
+            )
+        )
+
+
+def test_confirm_rejects_audit_idempotency_key_that_does_not_match_token():
+    audit_rows = []
+    service = _service(
+        lambda sql, token, settings, parameters=None, **_: (
+            ["old_value"],
+            [("old",)],
+        ),
+        audit_recorder=lambda row, token, timeout_seconds=None: (
+            audit_rows.append(row) or "audit_prepare"
+        ),
+    )
+    prepared = asyncio.run(service.prepare(_prepare_request(), token="user-token"))
+    tampered = ActionAuditRecord(
+        audit_id="audit_prepare",
+        row=replace(audit_rows[0], idempotency_key="another-request"),
+        effective_user="user@example.com",
+    )
+    restarted = _service(
+        lambda sql, token, settings, parameters=None, **_: (
+            ["old_value"],
+            [("old",)],
+        ),
         audit_lookup=lambda prepare_id, token, timeout_seconds=None: tampered,
     )
 

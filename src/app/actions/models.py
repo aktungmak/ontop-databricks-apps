@@ -57,6 +57,8 @@ class PrepareTokenPayload:
     action_kind: ActionKind
     subject_iri: str
     effective_user: str
+    invocation_id: str
+    request_hash: str
     params_hash: str
     preview_hash: str
     old_value_hash: str

@@ -111,6 +111,8 @@ class _PreparedAction:
     action: ActionDefinition
     request: PrepareActionRequest
     effective_user: str
+    invocation_id: str
+    request_hash: str
     preview: dict[str, object]
     old_value: object | None
     prepare_audit_id: str
@@ -207,36 +209,90 @@ class ActionService:
         action: ActionDefinition,
         effective_user: str,
     ) -> PrepareActionResponse:
-        prepare_id = f"prepare_{uuid4().hex}"
+        invocation_id = f"v1:{uuid4().hex}"
+        request_hash = _request_hash(request)
+        prepare_id = _prepare_id(invocation_id)
         pending = _PreparedAction(
             prepare_id=prepare_id,
             action=action,
             request=request,
             effective_user=effective_user,
+            invocation_id=invocation_id,
+            request_hash=request_hash,
             preview={},
             old_value=None,
             prepare_audit_id="",
         )
         try:
             self._require_published(action)
-            if action.idempotency_strategy == "REQUEST_KEY" and not (
-                isinstance(request.idempotency_key, str)
-                and request.idempotency_key.strip()
-            ):
-                raise ActionValidationError(
-                    "idempotency_key is required for REQUEST_KEY actions"
-                )
-            if action.kind == "WRITE_BACK":
-                preview, old_value = self._prepare_writeback(action, request, token)
-            else:
+            request = self._normalized_request(action, request)
+            if action.kind == "EXTERNAL":
                 self._validate_external_params(action, request.params)
-                preview = {
-                    "function_fqn": action.function_fqn or "",
-                    "subject_iri": request.subject_iri,
-                    "params": request.params,
-                    "idempotency_key": request.idempotency_key,
-                }
-                old_value = None
+            request_hash = _request_hash(request)
+            invocation_id = _invocation_id(action, request, effective_user)
+            prepare_id = _prepare_id(invocation_id)
+            pending = _PreparedAction(
+                prepare_id=prepare_id,
+                action=action,
+                request=request,
+                effective_user=effective_user,
+                invocation_id=invocation_id,
+                request_hash=request_hash,
+                preview={},
+                old_value=None,
+                prepare_audit_id="",
+            )
+            with self._confirmation_lock(prepare_id):
+                existing = self._find_existing_prepared(
+                    action,
+                    request,
+                    effective_user,
+                    invocation_id,
+                    token,
+                )
+                if existing is not None:
+                    self._require_matching_retry(existing, pending)
+                    return self._prepare_response(existing)
+
+                if action.kind == "WRITE_BACK":
+                    preview, old_value = self._prepare_writeback(action, request, token)
+                else:
+                    preview = {
+                        "function_fqn": action.function_fqn or "",
+                        "subject_iri": request.subject_iri,
+                        "params": request.params,
+                        "idempotency_key": request.idempotency_key,
+                    }
+                    old_value = None
+
+                pending = _PreparedAction(
+                    prepare_id=prepare_id,
+                    action=action,
+                    request=request,
+                    effective_user=effective_user,
+                    invocation_id=invocation_id,
+                    request_hash=request_hash,
+                    preview=preview,
+                    old_value=old_value,
+                    prepare_audit_id="",
+                )
+                audit_id = self._record(
+                    self._audit_row("PREPARE", "PREPARED", action, pending, None),
+                    token,
+                )
+                prepared = _PreparedAction(
+                    prepare_id=prepare_id,
+                    action=action,
+                    request=request,
+                    effective_user=effective_user,
+                    invocation_id=invocation_id,
+                    request_hash=request_hash,
+                    preview=preview,
+                    old_value=old_value,
+                    prepare_audit_id=audit_id,
+                )
+                self._prepared[prepare_id] = prepared
+                return self._prepare_response(prepared)
         except ActionError as exc:
             self._record(
                 self._audit_row(
@@ -246,59 +302,125 @@ class ActionService:
             )
             raise
 
-        params_hash = _hash(request.params)
-        preview_hash = _hash(preview)
-        old_value_hash = _hash(old_value) if action.kind == "WRITE_BACK" else ""
-        pending = _PreparedAction(
-            prepare_id=prepare_id,
-            action=action,
-            request=request,
-            effective_user=effective_user,
-            preview=preview,
-            old_value=old_value,
-            prepare_audit_id="",
-        )
-        audit_id = self._record(
-            self._audit_row("PREPARE", "PREPARED", action, pending, None), token
-        )
+    def _prepare_response(self, prepared: _PreparedAction) -> PrepareActionResponse:
         issued_at = int(time.time())
         ttl_seconds = (
             self._settings.action_prepare_ttl_seconds or self._token_signer.ttl_seconds
         )
         expires_at = issued_at + ttl_seconds
         payload = PrepareTokenPayload(
-            prepare_id=prepare_id,
-            action_iri=action.iri,
-            action_kind=action.kind,
-            subject_iri=request.subject_iri,
-            effective_user=effective_user,
-            params_hash=params_hash,
-            preview_hash=preview_hash,
-            old_value_hash=old_value_hash,
+            prepare_id=prepared.prepare_id,
+            action_iri=prepared.action.iri,
+            action_kind=prepared.action.kind,
+            subject_iri=prepared.request.subject_iri,
+            effective_user=prepared.effective_user,
+            invocation_id=prepared.invocation_id,
+            request_hash=prepared.request_hash,
+            params_hash=_hash(prepared.request.params),
+            preview_hash=_hash(prepared.preview),
+            old_value_hash=(
+                _hash(prepared.old_value)
+                if prepared.action.kind == "WRITE_BACK"
+                else ""
+            ),
             issued_at=issued_at,
             expires_at=expires_at,
             catalog_fingerprint=self._catalog_fingerprint(),
         )
-        self._prepared[prepare_id] = _PreparedAction(
-            prepare_id=prepare_id,
-            action=action,
-            request=request,
-            effective_user=effective_user,
-            preview=preview,
-            old_value=old_value,
-            prepare_audit_id=audit_id,
-        )
         return PrepareActionResponse(
-            prepare_id=prepare_id,
-            action_iri=action.iri,
-            action_kind=action.kind,
-            subject_iri=request.subject_iri,
-            preview=preview,
+            prepare_id=prepared.prepare_id,
+            action_iri=prepared.action.iri,
+            action_kind=prepared.action.kind,
+            subject_iri=prepared.request.subject_iri,
+            preview=prepared.preview,
             expires_at=datetime.fromtimestamp(expires_at, UTC)
             .isoformat()
             .replace("+00:00", "Z"),
             preparation_token=self._token_signer.sign(payload),
         )
+
+    def _normalized_request(
+        self,
+        action: ActionDefinition,
+        request: PrepareActionRequest,
+    ) -> PrepareActionRequest:
+        if action.kind == "EXTERNAL" and action.idempotency_strategy != "REQUEST_KEY":
+            raise ActionReadOnlyError(
+                "external action has no supported durable idempotency strategy",
+                ("UNSUPPORTED_IDEMPOTENCY_STRATEGY",),
+            )
+        if action.idempotency_strategy != "REQUEST_KEY":
+            return request
+        if not (
+            isinstance(request.idempotency_key, str) and request.idempotency_key.strip()
+        ):
+            raise ActionValidationError(
+                "idempotency_key is required for REQUEST_KEY actions"
+            )
+        return request.model_copy(
+            update={"idempotency_key": request.idempotency_key.strip()}
+        )
+
+    def _find_existing_prepared(
+        self,
+        action: ActionDefinition,
+        request: PrepareActionRequest,
+        effective_user: str,
+        invocation_id: str,
+        token: str,
+    ) -> _PreparedAction | None:
+        if action.idempotency_strategy != "REQUEST_KEY":
+            return None
+        existing = self._prepared.get(_prepare_id(invocation_id))
+        if existing is not None or self._audit_lookup is None:
+            return existing
+        try:
+            record = self._audit_lookup(
+                _prepare_id(invocation_id),
+                token,
+                action.timeout_seconds,
+            )
+        except Exception as exc:
+            raise ActionUnavailableError(
+                "could not read prepared action audit"
+            ) from exc
+        if record is None:
+            return None
+        existing = self._prepared_from_record(
+            action,
+            record,
+            invocation_id=invocation_id,
+        )
+        if existing.effective_user != effective_user:
+            raise ActionAuthorizationError(
+                "prepared action belongs to a different preparing user"
+            )
+        return existing
+
+    def _require_matching_retry(
+        self,
+        existing: _PreparedAction,
+        requested: _PreparedAction,
+    ) -> None:
+        matches = (
+            existing.prepare_id == requested.prepare_id
+            and existing.action.iri == requested.action.iri
+            and existing.action.kind == requested.action.kind
+            and existing.effective_user == requested.effective_user
+            and existing.invocation_id == requested.invocation_id
+            and existing.request_hash == requested.request_hash
+            and existing.request.subject_iri == requested.request.subject_iri
+            and existing.request.idempotency_key == requested.request.idempotency_key
+            and _hash(existing.request.params) == _hash(requested.request.params)
+        )
+        if existing.action.kind == "EXTERNAL":
+            matches = matches and (
+                existing.preview.get("function_fqn") == requested.action.function_fqn
+            )
+        if not matches:
+            raise ActionConflictError(
+                "idempotency key was already used with a different request"
+            )
 
     async def confirm(
         self, request: ConfirmActionRequest, token: str
@@ -567,13 +689,14 @@ class ActionService:
         )
         try:
             columns, rows = self._sql_runner(
-                f"SELECT {quote_fqn(tuple(action.function_fqn.split('.')))}(:object_uid, :params_json, :idempotency_key) AS result",
+                f"SELECT {quote_fqn(tuple(action.function_fqn.split('.')))}(:object_uid, :params_json, :invocation_id, :request_hash) AS result",
                 token,
                 self._settings,
                 {
                     "object_uid": prepared.request.subject_iri,
                     "params_json": json.dumps(prepared.request.params, sort_keys=True),
-                    "idempotency_key": prepared.request.idempotency_key,
+                    "invocation_id": prepared.invocation_id,
+                    "request_hash": prepared.request_hash,
                 },
                 timeout_seconds=action.timeout_seconds,
             )
@@ -591,10 +714,48 @@ class ActionService:
             )
             raise ActionUnavailableError("action execution failed") from exc
         result = _result(columns, rows)
+        if (
+            result.get("invocation_id") != prepared.invocation_id
+            or result.get("request_hash") != prepared.request_hash
+        ):
+            failed_id = self._record(
+                self._audit_row(
+                    "CONFIRM",
+                    "FAILED",
+                    action,
+                    prepared,
+                    payload,
+                    "external function returned an invalid idempotency envelope",
+                    result,
+                ),
+                token,
+            )
+            raise ActionUnavailableError(
+                "external function returned an invalid idempotency envelope",
+                failed_id,
+            )
         envelope_status = result.get("status")
         normalized_status = (
             envelope_status.upper() if isinstance(envelope_status, str) else None
         )
+        if normalized_status == "CONFLICT":
+            failed_id = self._record(
+                self._audit_row(
+                    "CONFIRM",
+                    "FAILED",
+                    action,
+                    prepared,
+                    payload,
+                    _string_or_none(result.get("message"))
+                    or "external action idempotency conflict",
+                    result,
+                ),
+                token,
+            )
+            raise ActionConflictError(
+                "external action idempotency conflict",
+                failed_id,
+            )
         if normalized_status in {"FAILED", "ERROR"}:
             failed_id = self._record(
                 self._audit_row(
@@ -753,6 +914,10 @@ class ActionService:
                 or row.action_iri != action.iri
                 or row.action_kind != action.kind
                 or row.subject_iri != prepared.request.subject_iri
+                or row.params_hash != payload.params_hash
+                or row.preview_hash != payload.preview_hash
+                or (row.old_value_hash or "") != payload.old_value_hash
+                or row.idempotency_key != prepared.request.idempotency_key
             ):
                 raise ActionConflictError(
                     "confirmation audit does not match signed token"
@@ -789,6 +954,13 @@ class ActionService:
             )
         except (TypeError, ValueError) as exc:
             raise ActionConflictError("confirmation audit result is invalid") from exc
+        if action.kind == "EXTERNAL" and (
+            result.get("invocation_id") != payload.invocation_id
+            or result.get("request_hash") != payload.request_hash
+        ):
+            raise ActionConflictError(
+                "confirmation audit idempotency envelope does not match signed token"
+            )
         response = ConfirmActionResponse(
             action_iri=action.iri,
             status=terminal.row.status,
@@ -947,22 +1119,46 @@ class ActionService:
             raise ActionConflictError(
                 "prepared action audit does not match signed token"
             )
+        return self._prepared_from_record(
+            action,
+            record,
+            invocation_id=payload.invocation_id,
+        )
+
+    def _prepared_from_record(
+        self,
+        action: ActionDefinition,
+        record: ActionAuditRecord,
+        *,
+        invocation_id: str,
+    ) -> _PreparedAction:
+        row = record.row
+        if (
+            row.phase != "PREPARE"
+            or row.status != "PREPARED"
+            or row.action_iri != action.iri
+            or row.action_kind != action.kind
+        ):
+            raise ActionConflictError("prepared action audit is invalid")
         try:
             params = _json_object(row.params_json)
             preview = _json_object(row.preview_json)
             old_value = _preview_old_value(preview, action.kind)
-        except (TypeError, ValueError) as exc:
-            raise ActionConflictError("prepared action audit is invalid") from exc
-        return _PreparedAction(
-            prepare_id=payload.prepare_id,
-            action=action,
-            request=PrepareActionRequest(
+            prepared_request = PrepareActionRequest(
                 action_iri=row.action_iri,
                 subject_iri=row.subject_iri,
                 params=params,
                 idempotency_key=row.idempotency_key,
-            ),
+            )
+        except (TypeError, ValueError) as exc:
+            raise ActionConflictError("prepared action audit is invalid") from exc
+        return _PreparedAction(
+            prepare_id=row.prepare_id or "",
+            action=action,
+            request=prepared_request,
             effective_user=record.effective_user,
+            invocation_id=invocation_id,
+            request_hash=_request_hash(prepared_request),
             preview=preview,
             old_value=old_value,
             prepare_audit_id=record.audit_id,
@@ -970,9 +1166,22 @@ class ActionService:
 
     def _matches(self, payload: PrepareTokenPayload, prepared: _PreparedAction) -> bool:
         return (
-            payload.action_iri == prepared.action.iri
+            payload.prepare_id == prepared.prepare_id
+            and payload.action_iri == prepared.action.iri
             and payload.subject_iri == prepared.request.subject_iri
             and payload.effective_user == prepared.effective_user
+            and payload.invocation_id == prepared.invocation_id
+            and (
+                prepared.action.idempotency_strategy != "REQUEST_KEY"
+                or payload.invocation_id
+                == _invocation_id(
+                    prepared.action,
+                    prepared.request,
+                    prepared.effective_user,
+                )
+            )
+            and payload.request_hash == prepared.request_hash
+            and payload.request_hash == _request_hash(prepared.request)
             and payload.params_hash == _hash(prepared.request.params)
             and payload.preview_hash == _hash(prepared.preview)
             and payload.old_value_hash
@@ -1062,6 +1271,37 @@ def _validate_writeback_value(value: object, datatype: str | None) -> object:
     if datatype == "string" and not isinstance(value, str):
         raise ActionValidationError("value must be a string")
     return value
+
+
+def _invocation_id(
+    action: ActionDefinition,
+    request: PrepareActionRequest,
+    effective_user: str,
+) -> str:
+    if action.idempotency_strategy != "REQUEST_KEY":
+        return f"v1:{uuid4().hex}"
+    if not isinstance(request.idempotency_key, str) or not request.idempotency_key:
+        raise ActionValidationError(
+            "idempotency_key is required for REQUEST_KEY actions"
+        )
+    material = "\0".join((effective_user, action.iri, request.idempotency_key)).encode(
+        "utf-8"
+    )
+    return f"v1:{hashlib.sha256(material).hexdigest()}"
+
+
+def _request_hash(request: PrepareActionRequest) -> str:
+    return _hash(
+        {
+            "subject_iri": request.subject_iri,
+            "params": request.params,
+        }
+    )
+
+
+def _prepare_id(invocation_id: str) -> str:
+    digest = hashlib.sha256(invocation_id.encode("utf-8")).hexdigest()
+    return f"prepare_{digest}"
 
 
 def _hash(value: object) -> str:

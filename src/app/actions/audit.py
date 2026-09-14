@@ -81,6 +81,8 @@ class ActionAuditLogger:
               AND phase = 'PREPARE'
               AND status = 'PREPARED'
               AND effective_user = session_user()
+            ORDER BY created_at, audit_id
+            LIMIT 1
         """
         columns, rows = self._sql_runner(
             statement,
@@ -91,8 +93,6 @@ class ActionAuditLogger:
         )
         if not rows:
             return None
-        if len(rows) != 1:
-            raise RuntimeError("prepared audit row is ambiguous")
         return _record(columns, rows[0])
 
     def get_confirmation_history(
