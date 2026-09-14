@@ -970,7 +970,11 @@ class ActionService:
                 or row.params_hash != payload.params_hash
                 or row.preview_hash != payload.preview_hash
                 or (row.old_value_hash or "") != payload.old_value_hash
-                or row.idempotency_key != prepared.request.idempotency_key
+                or row.status not in {"REFUSED", "CONFIRMING", "COMPLETED", "FAILED"}
+                or (
+                    row.idempotency_key != prepared.request.idempotency_key
+                    and not (row.status == "REFUSED" and row.idempotency_key is None)
+                )
             ):
                 raise ActionConflictError(
                     "confirmation audit does not match signed token"
@@ -1036,12 +1040,12 @@ class ActionService:
     ) -> str:
         if prepared is not None:
             row = self._audit_row(
-                "CONFIRM", "FAILED", action, prepared, payload, error.message
+                "CONFIRM", "REFUSED", action, prepared, payload, error.message
             )
         else:
             row = ActionAuditRow(
                 phase="CONFIRM",
-                status="FAILED",
+                status="REFUSED",
                 action_iri=action.iri,
                 action_kind=action.kind,
                 subject_iri=payload.subject_iri,

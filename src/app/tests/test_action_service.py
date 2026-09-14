@@ -347,7 +347,7 @@ def test_confirm_writeback_rejects_stale_value():
 
     assert [(row.phase, row.status, token) for row, token in audit_rows][-1] == (
         "CONFIRM",
-        "FAILED",
+        "REFUSED",
         "user-token",
     )
 
@@ -903,6 +903,57 @@ def test_completed_external_retry_replays_before_subject_revalidation():
     assert invocations == 1
     assert len(subject_checks) == 2
     assert retry_checks == []
+
+
+def test_external_retry_recovers_after_transient_subject_check_failure():
+    store = _AuditStore()
+    subject_checks = 0
+    invocations = 0
+
+    async def subject_checker(subject_iri, class_iri, token, timeout_seconds):
+        nonlocal subject_checks
+        subject_checks += 1
+        if subject_checks == 2:
+            raise RuntimeError("Ontop temporarily unavailable")
+        return True
+
+    def runner(sql, token, settings, parameters=None, **_):
+        nonlocal invocations
+        invocations += 1
+        return ["result"], [(_external_result(parameters),)]
+
+    service = _external_service(
+        runner,
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+        subject_checker=subject_checker,
+    )
+    prepared = asyncio.run(
+        service.prepare(
+            PrepareActionRequest(
+                action_iri="https://example.com/ontology#createPurchaseOrder",
+                subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                params={"quantity": 2},
+                idempotency_key="request-1",
+            ),
+            token="user-token",
+        )
+    )
+    request = ConfirmActionRequest(preparation_token=prepared.preparation_token)
+
+    with pytest.raises(ActionUnavailableError, match="subject validation failed"):
+        asyncio.run(service.confirm(request, token="user-token"))
+    recovered = asyncio.run(service.confirm(request, token="user-token"))
+
+    assert recovered.status == "COMPLETED"
+    assert invocations == 1
+    assert [record.row.status for record in store.records] == [
+        "PREPARED",
+        "REFUSED",
+        "CONFIRMING",
+        "COMPLETED",
+    ]
 
 
 def test_repeated_external_confirm_after_restart_uses_audit_outcome():

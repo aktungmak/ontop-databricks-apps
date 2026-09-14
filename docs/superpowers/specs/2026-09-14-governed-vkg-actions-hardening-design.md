@@ -162,6 +162,11 @@ failures when possible, and surfaced as action-unavailable responses.
 10. Validate affected rows or the external result envelope, then record the
     terminal audit event.
 
+Pre-invocation validation failures are recorded as non-terminal `REFUSED`
+events. A later retry revalidates them instead of replaying them as execution
+failures. Only authenticated `COMPLETED` and execution `FAILED` events are
+terminal.
+
 ## Error Semantics
 
 - Actor mismatch: HTTP 403, no action execution.

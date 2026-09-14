@@ -384,7 +384,9 @@ HMAC; require a Unity Catalog row filter for audit confidentiality; strictly
 validate recovered preparation data against the current request and target;
 replay terminal external outcomes before mutable subject checks; bound Ontop
 HTTP reformulation with the action timeout; and align the live audit DDL with
-the documented `VARIANT` columns.
+the documented `VARIANT` columns. Record pre-invocation validation failures as
+non-terminal `REFUSED` events so deterministic retries can recover after a
+transient subject-check failure.
 
 - [ ] **Step 7: Review the final diff and open the one PR**
 
