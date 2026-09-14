@@ -22,6 +22,7 @@ from actions.audit import ActionAuditLogger
 from actions.catalog import ActionCatalog
 from actions.routes import create_action_router
 from actions.service import ActionService
+from actions.subjects import VkgSubjectChecker
 from actions.tokens import PrepareTokenSigner
 from config import Settings
 from mcp_server import McpRuntime, configure as configure_mcp, mcp
@@ -88,12 +89,27 @@ async def ontop_lifespan(app: FastAPI):
         mapping_path=ontop_manager.mapping_path,
     )
     app.state.action_catalog = action_catalog
+
+    async def check_action_subject(
+        subject_iri: str,
+        class_iri: str,
+        token: str,
+        timeout_seconds: int,
+    ) -> bool:
+        checker = VkgSubjectChecker(
+            settings=settings,
+            http_client=app.state.http_client,
+            ontop_manager=ontop_manager,
+        )
+        return await checker(subject_iri, class_iri, token, timeout_seconds)
+
     if action_catalog.available:
         app.state.action_service = ActionService(
             catalog=action_catalog,
             settings=settings,
             audit_logger=ActionAuditLogger(settings),
             token_signer=PrepareTokenSigner.from_settings(settings),
+            subject_checker=check_action_subject,
         )
     else:
         app.state.action_service = ActionService(

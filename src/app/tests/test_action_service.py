@@ -17,6 +17,7 @@ from actions.r2rml_classifier import classify_writeback
 from actions.service import (
     ActionConflictError,
     ActionError,
+    ActionReadOnlyError,
     ActionService,
     ActionUnavailableError,
     ActionValidationError,
@@ -76,6 +77,10 @@ def _test_actor_resolver(token, settings, timeout_seconds=None):
     return "user@example.com"
 
 
+async def _test_subject_checker(subject_iri, class_iri, token, timeout_seconds):
+    return True
+
+
 def _service(
     sql_runner,
     audit_recorder=lambda row, token, timeout_seconds=None: "audit",
@@ -109,11 +114,14 @@ def _external_service(
     audit_lookup=None,
     audit_history_lookup=None,
     actor_resolver=_test_actor_resolver,
+    bound_class_iri="https://example.com/ontology#SourcingBundle",
+    subject_checker=_test_subject_checker,
 ) -> ActionService:
     action = ActionDefinition(
         iri="https://example.com/ontology#createPurchaseOrder",
         logical_key="createPurchaseOrder",
         kind="EXTERNAL",
+        bound_class_iri=bound_class_iri,
         function_fqn="cat.sch.create_purchase_order",
         status="PUBLISHED",
         input_schema={"quantity": "integer"},
@@ -127,6 +135,7 @@ def _external_service(
         audit_lookup=audit_lookup,
         audit_history_lookup=audit_history_lookup,
         actor_resolver=actor_resolver,
+        subject_checker=subject_checker,
     )
 
 
@@ -337,6 +346,87 @@ def test_confirm_external_invokes_uc_function_with_user_token():
     assert result.status == "COMPLETED"
     assert calls[-1][1] == "user-token"
     assert "SELECT `cat`.`sch`.`create_purchase_order`" in calls[-1][0]
+
+
+def test_external_prepare_rejects_subject_outside_bound_class():
+    async def subject_checker(subject_iri, class_iri, token, timeout_seconds):
+        return False
+
+    service = _external_service(
+        sql_runner=lambda sql, token, settings, parameters=None, **_: ([], []),
+        subject_checker=subject_checker,
+    )
+
+    with pytest.raises(ActionValidationError, match="bound class"):
+        asyncio.run(
+            service.prepare(
+                PrepareActionRequest(
+                    action_iri="https://example.com/ontology#createPurchaseOrder",
+                    subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                    params={"quantity": 2},
+                    idempotency_key="request-1",
+                ),
+                token="user-token",
+            )
+        )
+
+
+def test_external_confirm_rechecks_subject_before_function_execution():
+    checks = iter([True, False])
+    function_calls = []
+
+    async def subject_checker(subject_iri, class_iri, token, timeout_seconds):
+        return next(checks)
+
+    service = _external_service(
+        sql_runner=lambda sql, token, settings, parameters=None, **_: (
+            function_calls.append(sql) or (["result"], [({"status": "COMPLETED"},)])
+        ),
+        subject_checker=subject_checker,
+    )
+    prepared = asyncio.run(
+        service.prepare(
+            PrepareActionRequest(
+                action_iri="https://example.com/ontology#createPurchaseOrder",
+                subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                params={"quantity": 2},
+                idempotency_key="request-1",
+            ),
+            token="user-token",
+        )
+    )
+
+    with pytest.raises(ActionConflictError, match="bound class"):
+        asyncio.run(
+            service.confirm(
+                ConfirmActionRequest(preparation_token=prepared.preparation_token),
+                token="user-token",
+            )
+        )
+
+    assert function_calls == []
+
+
+def test_external_prepare_requires_bound_class():
+    service = _external_service(
+        sql_runner=lambda sql, token, settings, parameters=None, **_: ([], []),
+        bound_class_iri=None,
+    )
+
+    with pytest.raises(ActionReadOnlyError) as error:
+        asyncio.run(
+            service.prepare(
+                PrepareActionRequest(
+                    action_iri="https://example.com/ontology#createPurchaseOrder",
+                    subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                    params={"quantity": 2},
+                    idempotency_key="request-1",
+                ),
+                token="user-token",
+            )
+        )
+
+    assert "MISSING_BOUND_CLASS" in error.value.reason_codes
 
 
 def test_confirm_rejects_token_from_another_effective_user():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 import hashlib
@@ -42,6 +42,7 @@ AuditRecorder = Callable[[ActionAuditRow, str, int | None], str]
 AuditLookup = Callable[[str, str, int | None], ActionAuditRecord | None]
 AuditHistoryLookup = Callable[[str, str, int | None], list[ActionAuditRecord]]
 ActorResolver = Callable[[str, Settings, int | None], str]
+SubjectChecker = Callable[[str, str, str, int], Awaitable[bool]]
 _PLACEHOLDER = re.compile(r"\{[^{}]+\}")
 
 
@@ -128,12 +129,14 @@ class ActionService:
         audit_lookup: AuditLookup | None = None,
         audit_history_lookup: AuditHistoryLookup | None = None,
         actor_resolver: ActorResolver = resolve_effective_user,
+        subject_checker: SubjectChecker | None = None,
     ) -> None:
         self._catalog = catalog
         self._settings = settings
         self._token_signer = token_signer
         self._sql_runner = sql_runner
         self._actor_resolver = actor_resolver
+        self._subject_checker = subject_checker
         self._prepared: dict[str, _PreparedAction] = {}
         self._confirmed: dict[str, ConfirmActionResponse] = {}
         # The audit DDL has no unique claim key. This lock closes same-process
@@ -182,6 +185,13 @@ class ActionService:
             token,
             action.timeout_seconds,
         )
+        if action.kind == "EXTERNAL":
+            await self._check_external_subject(
+                action,
+                request.subject_iri,
+                token,
+                confirmation=False,
+            )
         return await asyncio.to_thread(
             self._prepare_sync,
             request,
@@ -316,6 +326,24 @@ class ActionService:
                 token,
             )
             raise error
+        if action.kind == "EXTERNAL":
+            try:
+                await self._check_external_subject(
+                    action,
+                    payload.subject_iri,
+                    token,
+                    confirmation=True,
+                )
+            except ActionError as error:
+                await asyncio.to_thread(
+                    self._record_confirm_refusal,
+                    action,
+                    payload,
+                    None,
+                    error,
+                    token,
+                )
+                raise
         return await asyncio.to_thread(
             self._confirm_sync,
             action,
@@ -636,6 +664,42 @@ class ActionService:
         if not isinstance(effective_user, str) or not effective_user.strip():
             raise ActionUnavailableError("could not resolve effective user")
         return effective_user
+
+    async def _check_external_subject(
+        self,
+        action: ActionDefinition,
+        subject_iri: str,
+        token: str,
+        *,
+        confirmation: bool,
+    ) -> None:
+        if not action.bound_class_iri:
+            raise ActionReadOnlyError(
+                "external action has no bound class",
+                ("MISSING_BOUND_CLASS",),
+            )
+        if self._subject_checker is None:
+            raise ActionUnavailableError("VKG subject validation is unavailable")
+        try:
+            matches = await self._subject_checker(
+                subject_iri,
+                action.bound_class_iri,
+                token,
+                action.timeout_seconds,
+            )
+        except ActionError:
+            raise
+        except ValueError as exc:
+            raise ActionValidationError(
+                "subject or bound class is not a safe absolute IRI"
+            ) from exc
+        except Exception as exc:
+            raise ActionUnavailableError("VKG subject validation failed") from exc
+        if matches:
+            return
+        if confirmation:
+            raise ActionConflictError("subject is no longer in the action bound class")
+        raise ActionValidationError("subject is not in the action bound class")
 
     def _action(self, action_iri: str) -> ActionDefinition:
         if not self._catalog.available:
