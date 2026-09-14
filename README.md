@@ -73,6 +73,7 @@ BUNDLE_VAR_catalog=main BUNDLE_VAR_schema=default BUNDLE_VAR_instance=beta make 
 | `/mcp` | TBox Toolbox MCP |
 | `/health` | Health check (Ontop + ontology loaded) |
 | `/mapper` | Visual R2RML mapping editor |
+| `/api/actions` | Governed action discovery, prepare, and confirm API |
 
 ## MCP tools
 
@@ -85,6 +86,10 @@ Public MCP URL: `https://<app-url>/mcp`
 | `describe_iri` | Neighborhood of the given IRI returned in Turtle format |
 | `check_sparql` | Ontology-Based Query Check (OBQC) |
 | `execute_sparql` | Run SPARQL against the VKG → SPARQL JSON or error text |
+| `list_actions` | List published actions and writable properties |
+| `describe_action` | Describe one published action |
+| `prepare_action` | Validate an action and return a signed preview |
+| `confirm_action` | Confirm a prepared action and run its side effect |
 
 ### Agent usage pattern
 
@@ -94,6 +99,118 @@ Public MCP URL: `https://<app-url>/mcp`
 4. `execute_sparql` and iterate based on the results
 
 TBox tools use the in-memory ontology only. `execute_sparql` uses Ontop + Databricks SQL with the caller's Apps-forwarded access token.
+
+Action execution also uses the caller's `x-forwarded-access-token`: Unity
+Catalog permissions govern source reads, audit reads/writes, table updates,
+and UC function invocation. Side effects use a two-phase flow. `prepare_action`
+validates current state and writes a preview audit row; `confirm_action`
+verifies the signed, unexpired preview, writes a confirming row, revalidates
+state, and only then executes. The app remains a read-only VKG when no action
+catalog is present.
+
+## Governed actions
+
+Actions are RDF declarations in an `actions.ttl` file alongside the deployed
+mapping and ontology. See [mappings/samples/actions.ttl](mappings/samples/actions.ttl)
+for the vocabulary shape. Copy a reviewed catalog to
+`<MAPPINGS_VOLUME_PATH>/mappings/.internal/` and set `VKG_ACTIONS_FILE` to its
+filename.
+
+Two action kinds are supported:
+
+- **Write-back:** updates one literal property on one existing row when the
+  R2RML mapping is safely invertible. Joined, computed, aggregated, distinct,
+  multi-table, multi-key, identity-column, object-property, and coupled-column
+  mappings are reported as read-only.
+- **External:** invokes a named three-part Unity Catalog function. External
+  credentials and HTTP calls belong in that function, typically through a UC
+  connection; the Ontop app does not store them.
+
+### Runtime configuration
+
+| Variable | Description |
+|----------|-------------|
+| `VKG_ACTIONS_FILE` | Catalog filename; defaults to `actions.ttl` |
+| `VKG_ACTION_AUDIT_TABLE` | Three-part UC table for action audit rows |
+| `VKG_ACTION_CONFIRM_SIGNING_KEY` | Secret used to sign preparation tokens |
+| `VKG_ACTION_PREPARE_TTL_SECONDS` | Preparation token lifetime; defaults to `600` |
+
+The bundle configures the non-secret values. Before publishing an action
+catalog, bind the signing key from a Databricks secret resource; never put its
+value in repository configuration:
+
+```yaml
+# Under resources.apps.ontop_vkg.config.env
+- name: VKG_ACTION_CONFIRM_SIGNING_KEY
+  value_from: action-confirm-signing-key
+
+# Under resources.apps.ontop_vkg.resources
+- name: action-confirm-signing-key
+  secret:
+    scope: my-secret-scope
+    key: vkg-action-signing-key
+    permission: READ
+```
+
+`VKG_ACTION_AUDIT_TABLE` and the signing key are required when a catalog is
+present. They are intentionally not required for the default read-only
+deployment.
+
+### Required Unity Catalog privileges
+
+Grant the acting user, not only the app service principal, the privileges used
+by each action:
+
+```sql
+GRANT SELECT, MODIFY ON TABLE <catalog>.<schema>.<source_table> TO `<principal>`;
+GRANT EXECUTE ON FUNCTION <catalog>.<schema>.<function_name> TO `<principal>`;
+GRANT INSERT, SELECT ON TABLE <catalog>.<schema>.<audit_table> TO `<principal>`;
+```
+
+The corresponding `USE CATALOG` and `USE SCHEMA` grants are also required.
+Create the audit table with this v1 shape:
+
+```sql
+CREATE TABLE <catalog>.<schema>.<audit_table> (
+  audit_id STRING, phase STRING, status STRING, action_iri STRING,
+  action_kind STRING, subject_iri STRING, prepare_id STRING,
+  params_hash STRING, preview_hash STRING, old_value_hash STRING,
+  idempotency_key STRING, source_table STRING, source_key_column STRING,
+  source_value_column STRING, old_value VARIANT, new_value VARIANT,
+  params_json STRING, preview_json STRING, result_json STRING,
+  error_message STRING, effective_user STRING, created_at TIMESTAMP
+);
+```
+
+### REST API
+
+| Method and path | Purpose |
+|-----------------|---------|
+| `GET /api/actions` | List actions; supports `class_iri`, `subject_iri`, `property_iri`, and `kind` filters |
+| `GET /api/actions/describe?action_iri=...` | Describe one action |
+| `POST /api/actions/prepare` | Prepare an action under the forwarded user token |
+| `POST /api/actions/confirm` | Revalidate and execute a preparation token |
+
+Prepare and confirm require `x-forwarded-access-token`. Confirmation refuses
+expired, tampered, mismatched, or stale write-back previews.
+
+External functions receive `object_uid`, `params_json`, and `idempotency_key`
+and return a struct containing at least a terminal `status` (`COMPLETED`,
+`FAILED`, or `ERROR`). See the sample catalog and action tests for complete
+examples.
+
+For a disposable live verification against a SQL warehouse, run:
+
+```bash
+python scripts/live-action-e2e.py \
+  --profile DEFAULT \
+  --host https://<workspace-host> \
+  --warehouse-id <warehouse-id>
+```
+
+The harness creates isolated source, audit, and function objects, exercises
+REST and MCP action paths, verifies user attribution, and removes the objects
+unless `--keep-resources` is supplied.
 
 ## Configuration
 
@@ -111,6 +228,9 @@ Bundle variables in `databricks.yml`:
 | `ontop_version` | `5.5.0` | Ontop release version |
 | `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
 | `jre_version` | `17.0.19_10` | Temurin JRE version |
+| `actions_file` | `actions.ttl` | Action catalog filename in the mappings volume |
+| `action_audit_table` | empty | Three-part action audit table |
+| `action_prepare_ttl_seconds` | `600` | Preparation token lifetime |
 
 Set required variables using the Databricks bundle environment-variable convention:
 `BUNDLE_VAR_catalog`, `BUNDLE_VAR_schema`, and `BUNDLE_VAR_instance`. 

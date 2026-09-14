@@ -1,0 +1,30 @@
+@prefix act: <https://databricks.com/ontology/vkg/actions#> .
+@prefix ont: <https://example.com/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# SAMPLE ONLY. These identifiers are illustrative and do not name a real
+# external endpoint, credential, or production Unity Catalog function.
+
+ont:updateSupplierName a act:WriteBackAction ;
+    act:logicalKey "updateSupplierName" ;
+    act:boundClass ont:Supplier ;
+    act:targetProperty ont:supplierName ;
+    act:status "PUBLISHED" ;
+    act:inputParameter [
+        act:parameterName "newValue" ;
+        act:datatype xsd:string
+    ] .
+
+ont:requestSupplierReview a act:ExternalAction ;
+    act:logicalKey "requestSupplierReview" ;
+    act:boundClass ont:Supplier ;
+    act:invokesFunction "example_catalog.example_schema.request_supplier_review" ;
+    act:status "PUBLISHED" ;
+    act:inputParameter [
+        act:parameterName "reason" ;
+        act:datatype xsd:string
+    ] ;
+    act:outputParameter [
+        act:parameterName "status" ;
+        act:datatype xsd:string
+    ] .
