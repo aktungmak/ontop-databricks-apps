@@ -9,7 +9,7 @@ headers used by Databricks Apps, then verifies:
 * MCP action discovery, prepare, confirm
 * write-back changed the source Delta table
 * external action invoked a named UC function and accepted its result envelope
-* audit rows were written with current_user() attribution
+* audit rows were written with session_user() attribution
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ sys.path.insert(0, str(APP_DIR))
 
 from actions.audit import ActionAuditLogger  # noqa: E402
 from actions.catalog import ActionCatalog  # noqa: E402
+from actions.dbsql import run_user_sql  # noqa: E402
 from actions.routes import create_action_router  # noqa: E402
 from actions.service import ActionService  # noqa: E402
 from actions.tokens import PrepareTokenSigner  # noqa: E402
@@ -71,7 +72,7 @@ def main() -> None:
     fqn = _Fqn(catalog, schema)
     print(f"Workspace: {args.host}")
     print(f"Warehouse: {args.warehouse_id}")
-    print(f"Actor: {client.scalar('SELECT current_user()')}")
+    print(f"Actor: {client.scalar('SELECT session_user()')}")
     print(f"Schema: {fqn.schema_fqn}")
 
     try:
@@ -165,7 +166,7 @@ def main() -> None:
             f"SELECT DISTINCT effective_user FROM {audit_fqn} ORDER BY effective_user"
         )
         users = [row.effective_user for row in effective_users]
-        expected_user = client.scalar("SELECT current_user()")
+        expected_user = client.scalar("SELECT session_user()")
         assert users == [expected_user], users
         total_audit = client.scalar(f"SELECT count(*) FROM {audit_fqn}")
         assert total_audit == 12, total_audit
@@ -321,13 +322,18 @@ def _setup_uc_objects(
     )
     client.execute(
         f"""
+        -- Side-effect-free contract fixture. A production external integration
+        -- must atomically persist one result per invocation_id/request_hash.
         CREATE FUNCTION {fqn.schema_fqn}.`{external_function}`(
           object_uid STRING,
           params_json STRING,
-          idempotency_key STRING
+          invocation_id STRING,
+          request_hash STRING
         )
         RETURNS STRUCT<
           status: STRING,
+          invocation_id: STRING,
+          request_hash: STRING,
           external_request_id: STRING,
           result: STRING,
           message: STRING,
@@ -335,7 +341,9 @@ def _setup_uc_objects(
         >
         RETURN named_struct(
           'status', 'COMPLETED',
-          'external_request_id', idempotency_key,
+          'invocation_id', invocation_id,
+          'request_hash', request_hash,
+          'external_request_id', invocation_id,
           'result', concat(object_uid, '|', params_json),
           'message', 'accepted',
           'executed_at', current_timestamp()
@@ -417,6 +425,7 @@ ex:updateSupplierName a act:WriteBackAction ;
   act:boundClass ex:Supplier ;
   act:targetProperty ex:supplierName ;
   act:status "PUBLISHED" ;
+  act:timeoutSeconds 60 ;
   act:idempotencyStrategy "REQUEST_KEY" ;
   act:inputParameter [
     act:parameterName "newValue" ;
@@ -428,6 +437,7 @@ ex:requestSupplierReview a act:ExternalAction ;
   act:boundClass ex:Supplier ;
   act:invokesFunction "{catalog}.{schema}.{external_function}" ;
   act:status "PUBLISHED" ;
+  act:timeoutSeconds 60 ;
   act:idempotencyStrategy "REQUEST_KEY" ;
   act:inputParameter [
     act:parameterName "reason" ;
@@ -454,11 +464,36 @@ ex:requestSupplierReview a act:ExternalAction ;
         action_confirm_signing_key="live-action-e2e-signing-key",
         action_prepare_ttl_seconds=600,
     )
+
+    async def subject_checker(
+        subject_iri: str,
+        class_iri: str,
+        token: str,
+        timeout_seconds: int,
+    ) -> bool:
+        prefix = f"{SUBJECT_BASE}/"
+        if class_iri != f"{ACTION_NS}Supplier" or not subject_iri.startswith(prefix):
+            return False
+        supplier_id = subject_iri[len(prefix) :]
+        _, rows = await asyncio.to_thread(
+            run_user_sql,
+            (
+                f"SELECT 1 FROM `{catalog}`.`{schema}`.`{source_table}` "
+                "WHERE supplier_id = :supplier_id LIMIT 1"
+            ),
+            token,
+            settings,
+            {"supplier_id": supplier_id},
+            timeout_seconds=timeout_seconds,
+        )
+        return len(rows) == 1
+
     return ActionService(
         catalog=action_catalog,
         settings=settings,
         audit_logger=ActionAuditLogger(settings),
         token_signer=PrepareTokenSigner.from_settings(settings),
+        subject_checker=subject_checker,
     )
 
 
@@ -588,8 +623,10 @@ async def _run_mcp_http_external(
             ).data
             assert confirmed["status"] == "COMPLETED", confirmed
             assert confirmed["result"]["status"] == "COMPLETED", confirmed
+            assert confirmed["result"]["invocation_id"].startswith("v1:"), confirmed
             assert (
-                confirmed["result"]["external_request_id"] == "mcp-http-external-1"
+                confirmed["result"]["external_request_id"]
+                == confirmed["result"]["invocation_id"]
             ), confirmed
 
 

@@ -105,8 +105,9 @@ Catalog permissions govern source reads, audit reads/writes, table updates,
 and UC function invocation. Side effects use a two-phase flow. `prepare_action`
 validates current state and writes a preview audit row; `confirm_action`
 verifies the signed, unexpired preview, writes a confirming row, revalidates
-state, and only then executes. The app remains a read-only VKG when no action
-catalog is present.
+state, and only then executes. Preparation tokens are bound to the actor
+resolved by `session_user()` and cannot be confirmed by another user. The app
+remains a read-only VKG when no action catalog is present.
 
 ## Governed actions
 
@@ -124,7 +125,8 @@ Two action kinds are supported:
   mappings are reported as read-only.
 - **External:** invokes a named three-part Unity Catalog function. External
   credentials and HTTP calls belong in that function, typically through a UC
-  connection; the Ontop app does not store them.
+  connection; the Ontop app does not store them. The subject must be a current
+  VKG instance of the action's `boundClass` at both prepare and confirm.
 
 ### Runtime configuration
 
@@ -182,6 +184,12 @@ CREATE TABLE <catalog>.<schema>.<audit_table> (
 );
 ```
 
+`effective_user` is populated from `session_user()` by the app's audit insert,
+and audit recovery queries restrict rows to that same session principal.
+Primary-key and unique constraints on Delta tables are informational, so this
+audit table is replay evidence rather than an external-effect uniqueness
+mechanism.
+
 ### REST API
 
 | Method and path | Purpose |
@@ -194,10 +202,27 @@ CREATE TABLE <catalog>.<schema>.<audit_table> (
 Prepare and confirm require `x-forwarded-access-token`. Confirmation refuses
 expired, tampered, mismatched, or stale write-back previews.
 
-External functions receive `object_uid`, `params_json`, and `idempotency_key`
-and return a struct containing at least a terminal `status` (`COMPLETED`,
-`FAILED`, or `ERROR`). See the sample catalog and action tests for complete
-examples.
+Published external actions must use `REQUEST_KEY`. The runtime trims the opaque
+client key and derives an actor/action-scoped `invocation_id` plus a canonical
+`request_hash`. External functions receive four arguments:
+
+```text
+(object_uid STRING, params_json STRING, invocation_id STRING, request_hash STRING)
+```
+
+The target integration must atomically claim `invocation_id` with
+`request_hash`, perform its external effect at most once, persist the terminal
+result, and return that result for identical retries. Reusing an invocation ID
+with a different request hash must return `CONFLICT` without another effect.
+Every result envelope must echo `invocation_id` and `request_hash` and contain a
+terminal `status` (`COMPLETED`, `SUCCESS`, `FAILED`, `ERROR`, or `CONFLICT`). The
+runtime replays terminal audit outcomes but does not claim that the audit Delta
+table alone provides exactly-once execution.
+
+Each action's `act:timeoutSeconds` is applied with `SET STATEMENT_TIMEOUT` on
+the same DBSQL session that performs its reads, writes, subject checks, audits,
+or function invocation. Synchronous DBSQL work runs outside the FastAPI event
+loop.
 
 For a disposable live verification against a SQL warehouse, run:
 
