@@ -59,6 +59,28 @@ def statement_timeout_sql(timeout_seconds: int | None) -> str | None:
     return f"SET STATEMENT_TIMEOUT = {timeout_seconds}"
 
 
+def resolve_effective_user(
+    token: str,
+    settings: Settings,
+    timeout_seconds: int | None = None,
+) -> str:
+    """Resolve the Databricks principal represented by a forwarded token."""
+    columns, rows = run_user_sql(
+        "SELECT session_user() AS effective_user",
+        token,
+        settings,
+        timeout_seconds=timeout_seconds,
+    )
+    if [column.casefold() for column in columns] != ["effective_user"]:
+        raise RuntimeError("effective user query returned an invalid schema")
+    if len(rows) != 1 or len(rows[0]) != 1:
+        raise RuntimeError("effective user query returned an invalid result")
+    effective_user = rows[0][0]
+    if not isinstance(effective_user, str) or not effective_user.strip():
+        raise RuntimeError("effective user query returned an invalid principal")
+    return effective_user
+
+
 def quote_identifier(value: str) -> str:
     if not _IDENTIFIER.fullmatch(value):
         raise ValueError("identifier is not a simple Databricks identifier")

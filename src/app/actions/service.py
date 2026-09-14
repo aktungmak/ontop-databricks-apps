@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -14,7 +15,12 @@ from uuid import uuid4
 
 from actions.audit import ActionAuditLogger
 from actions.catalog import ActionCatalog
-from actions.dbsql import quote_fqn, quote_identifier, run_user_sql
+from actions.dbsql import (
+    quote_fqn,
+    quote_identifier,
+    resolve_effective_user,
+    run_user_sql,
+)
 from actions.models import (
     ActionAuditRow,
     ActionAuditRecord,
@@ -32,9 +38,10 @@ from config import Settings
 SqlRunner = Callable[
     [str, str, Settings, Mapping[str, object] | None], tuple[list[str], list[tuple]]
 ]
-AuditRecorder = Callable[[ActionAuditRow, str], str]
-AuditLookup = Callable[[str, str], ActionAuditRecord | None]
-AuditHistoryLookup = Callable[[str, str], list[ActionAuditRecord]]
+AuditRecorder = Callable[[ActionAuditRow, str, int | None], str]
+AuditLookup = Callable[[str, str, int | None], ActionAuditRecord | None]
+AuditHistoryLookup = Callable[[str, str, int | None], list[ActionAuditRecord]]
+ActorResolver = Callable[[str, Settings, int | None], str]
 _PLACEHOLDER = re.compile(r"\{[^{}]+\}")
 
 
@@ -85,6 +92,11 @@ class ActionValidationError(ActionError):
         )
 
 
+class ActionAuthorizationError(ActionError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, error_code="ACTION_FORBIDDEN", status_code=403)
+
+
 class ActionUnavailableError(ActionError):
     def __init__(self, message: str, audit_id: str | None = None) -> None:
         super().__init__(
@@ -97,6 +109,7 @@ class _PreparedAction:
     prepare_id: str
     action: ActionDefinition
     request: PrepareActionRequest
+    effective_user: str
     preview: dict[str, object]
     old_value: object | None
     prepare_audit_id: str
@@ -114,11 +127,13 @@ class ActionService:
         audit_recorder: AuditRecorder | None = None,
         audit_lookup: AuditLookup | None = None,
         audit_history_lookup: AuditHistoryLookup | None = None,
+        actor_resolver: ActorResolver = resolve_effective_user,
     ) -> None:
         self._catalog = catalog
         self._settings = settings
         self._token_signer = token_signer
         self._sql_runner = sql_runner
+        self._actor_resolver = actor_resolver
         self._prepared: dict[str, _PreparedAction] = {}
         self._confirmed: dict[str, ConfirmActionResponse] = {}
         # The audit DDL has no unique claim key. This lock closes same-process
@@ -162,8 +177,36 @@ class ActionService:
         self, request: PrepareActionRequest, token: str
     ) -> PrepareActionResponse:
         action = self._action(request.action_iri)
+        effective_user = await asyncio.to_thread(
+            self._resolve_actor,
+            token,
+            action.timeout_seconds,
+        )
+        return await asyncio.to_thread(
+            self._prepare_sync,
+            request,
+            token,
+            action,
+            effective_user,
+        )
+
+    def _prepare_sync(
+        self,
+        request: PrepareActionRequest,
+        token: str,
+        action: ActionDefinition,
+        effective_user: str,
+    ) -> PrepareActionResponse:
         prepare_id = f"prepare_{uuid4().hex}"
-        pending = _PreparedAction(prepare_id, action, request, {}, None, "")
+        pending = _PreparedAction(
+            prepare_id=prepare_id,
+            action=action,
+            request=request,
+            effective_user=effective_user,
+            preview={},
+            old_value=None,
+            prepare_audit_id="",
+        )
         try:
             self._require_published(action)
             if action.idempotency_strategy == "REQUEST_KEY" and not (
@@ -196,7 +239,15 @@ class ActionService:
         params_hash = _hash(request.params)
         preview_hash = _hash(preview)
         old_value_hash = _hash(old_value) if action.kind == "WRITE_BACK" else ""
-        pending = _PreparedAction(prepare_id, action, request, preview, old_value, "")
+        pending = _PreparedAction(
+            prepare_id=prepare_id,
+            action=action,
+            request=request,
+            effective_user=effective_user,
+            preview=preview,
+            old_value=old_value,
+            prepare_audit_id="",
+        )
         audit_id = self._record(
             self._audit_row("PREPARE", "PREPARED", action, pending, None), token
         )
@@ -210,6 +261,7 @@ class ActionService:
             action_iri=action.iri,
             action_kind=action.kind,
             subject_iri=request.subject_iri,
+            effective_user=effective_user,
             params_hash=params_hash,
             preview_hash=preview_hash,
             old_value_hash=old_value_hash,
@@ -218,7 +270,13 @@ class ActionService:
             catalog_fingerprint=self._catalog_fingerprint(),
         )
         self._prepared[prepare_id] = _PreparedAction(
-            prepare_id, action, request, preview, old_value, audit_id
+            prepare_id=prepare_id,
+            action=action,
+            request=request,
+            effective_user=effective_user,
+            preview=preview,
+            old_value=old_value,
+            prepare_audit_id=audit_id,
         )
         return PrepareActionResponse(
             prepare_id=prepare_id,
@@ -240,6 +298,37 @@ class ActionService:
         except ValueError as exc:
             raise ActionValidationError("invalid or expired preparation token") from exc
         action = self._action(payload.action_iri)
+        effective_user = await asyncio.to_thread(
+            self._resolve_actor,
+            token,
+            action.timeout_seconds,
+        )
+        if effective_user != payload.effective_user:
+            error = ActionAuthorizationError(
+                "preparation token belongs to a different preparing user"
+            )
+            await asyncio.to_thread(
+                self._record_confirm_refusal,
+                action,
+                payload,
+                None,
+                error,
+                token,
+            )
+            raise error
+        return await asyncio.to_thread(
+            self._confirm_sync,
+            action,
+            payload,
+            token,
+        )
+
+    def _confirm_sync(
+        self,
+        action: ActionDefinition,
+        payload: PrepareTokenPayload,
+        token: str,
+    ) -> ConfirmActionResponse:
         try:
             self._require_published(action)
         except ActionError as exc:
@@ -308,7 +397,12 @@ class ActionService:
         new_value = _validate_writeback_value(
             request.params.get("newValue"), target.datatype_iri
         )
-        old_value = self._read_old_value(target, key_value, token)
+        old_value = self._read_old_value(
+            target,
+            key_value,
+            token,
+            action.timeout_seconds,
+        )
         return {
             "subject_iri": request.subject_iri,
             "property_iri": target.property_iri,
@@ -331,7 +425,12 @@ class ActionService:
         try:
             target = self._writeback_target(action)
             key_value = _subject_key(target, prepared.request.subject_iri)
-            current_value = self._read_old_value(target, key_value, token)
+            current_value = self._read_old_value(
+                target,
+                key_value,
+                token,
+                action.timeout_seconds,
+            )
         except ActionError as exc:
             self._record_confirm_refusal(action, payload, prepared, exc, token)
             raise
@@ -363,6 +462,7 @@ class ActionService:
                     "key_value": key_value,
                     "old_value": prepared.old_value,
                 },
+                timeout_seconds=action.timeout_seconds,
             )
         except Exception as exc:
             self._record(
@@ -447,6 +547,7 @@ class ActionService:
                     "params_json": json.dumps(prepared.request.params, sort_keys=True),
                     "idempotency_key": prepared.request.idempotency_key,
                 },
+                timeout_seconds=action.timeout_seconds,
             )
         except Exception as exc:
             self._record(
@@ -521,6 +622,21 @@ class ActionService:
             [prepared.prepare_audit_id, confirming_id, completed_id],
         )
 
+    def _resolve_actor(self, token: str, timeout_seconds: int) -> str:
+        try:
+            effective_user = self._actor_resolver(
+                token,
+                self._settings,
+                timeout_seconds,
+            )
+        except ActionError:
+            raise
+        except Exception as exc:
+            raise ActionUnavailableError("could not resolve effective user") from exc
+        if not isinstance(effective_user, str) or not effective_user.strip():
+            raise ActionUnavailableError("could not resolve effective user")
+        return effective_user
+
     def _action(self, action_iri: str) -> ActionDefinition:
         if not self._catalog.available:
             raise ActionUnavailableError("actions are unavailable")
@@ -554,7 +670,11 @@ class ActionService:
         if self._audit_history_lookup is None:
             return None
         try:
-            history = self._audit_history_lookup(payload.prepare_id, token)
+            history = self._audit_history_lookup(
+                payload.prepare_id,
+                token,
+                action.timeout_seconds,
+            )
         except Exception as exc:
             raise ActionUnavailableError(
                 "could not read confirmation audit history"
@@ -562,7 +682,9 @@ class ActionService:
         for record in history:
             row = record.row
             if (
-                row.phase != "CONFIRM"
+                record.effective_user != payload.effective_user
+                or prepared.effective_user != payload.effective_user
+                or row.phase != "CONFIRM"
                 or row.prepare_id != payload.prepare_id
                 or row.action_iri != action.iri
                 or row.action_kind != action.kind
@@ -664,12 +786,20 @@ class ActionService:
         return classification.target
 
     def _read_old_value(
-        self, target: WriteBackTarget, key_value: str, token: str
+        self,
+        target: WriteBackTarget,
+        key_value: str,
+        token: str,
+        timeout_seconds: int,
     ) -> object | None:
         statement = f"SELECT {quote_identifier(target.value_column)} AS old_value FROM {quote_fqn(target.table_fqn)} WHERE {quote_identifier(target.key_column)} = :key_value"
         try:
             _, rows = self._sql_runner(
-                statement, token, self._settings, {"key_value": key_value}
+                statement,
+                token,
+                self._settings,
+                {"key_value": key_value},
+                timeout_seconds=timeout_seconds,
             )
         except Exception as exc:
             raise ActionUnavailableError("could not read action source") from exc
@@ -679,7 +809,12 @@ class ActionService:
 
     def _record(self, row: ActionAuditRow, token: str) -> str:
         try:
-            return self._audit_recorder(row, token)
+            action = next(
+                (item for item in self._catalog.actions if item.iri == row.action_iri),
+                None,
+            )
+            timeout_seconds = action.timeout_seconds if action is not None else None
+            return self._audit_recorder(row, token, timeout_seconds)
         except Exception as exc:
             raise ActionUnavailableError("could not record action audit event") from exc
 
@@ -725,7 +860,11 @@ class ActionService:
         if self._audit_lookup is None:
             raise ActionUnavailableError("prepared action audit lookup is unavailable")
         try:
-            record = self._audit_lookup(payload.prepare_id, token)
+            record = self._audit_lookup(
+                payload.prepare_id,
+                token,
+                action.timeout_seconds,
+            )
         except Exception as exc:
             raise ActionUnavailableError(
                 "could not read prepared action audit"
@@ -734,7 +873,8 @@ class ActionService:
             raise ActionConflictError("prepared action audit is unavailable")
         row = record.row
         if (
-            row.phase != "PREPARE"
+            record.effective_user != payload.effective_user
+            or row.phase != "PREPARE"
             or row.status != "PREPARED"
             or row.action_iri != payload.action_iri
             or row.action_kind != payload.action_kind
@@ -750,23 +890,25 @@ class ActionService:
         except (TypeError, ValueError) as exc:
             raise ActionConflictError("prepared action audit is invalid") from exc
         return _PreparedAction(
-            payload.prepare_id,
-            action,
-            PrepareActionRequest(
+            prepare_id=payload.prepare_id,
+            action=action,
+            request=PrepareActionRequest(
                 action_iri=row.action_iri,
                 subject_iri=row.subject_iri,
                 params=params,
                 idempotency_key=row.idempotency_key,
             ),
-            preview,
-            old_value,
-            record.audit_id,
+            effective_user=record.effective_user,
+            preview=preview,
+            old_value=old_value,
+            prepare_audit_id=record.audit_id,
         )
 
     def _matches(self, payload: PrepareTokenPayload, prepared: _PreparedAction) -> bool:
         return (
             payload.action_iri == prepared.action.iri
             and payload.subject_iri == prepared.request.subject_iri
+            and payload.effective_user == prepared.effective_user
             and payload.params_hash == _hash(prepared.request.params)
             and payload.preview_hash == _hash(prepared.preview)
             and payload.old_value_hash

@@ -56,13 +56,14 @@ class PrepareTokenPayload:
     action_iri: str
     action_kind: ActionKind
     subject_iri: str
+    effective_user: str
     params_hash: str
     preview_hash: str
     old_value_hash: str
     issued_at: int
     expires_at: int
     catalog_fingerprint: str
-    version: int = 1
+    version: int = 2
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class ActionAuditRow:
 class ActionAuditRecord:
     audit_id: str
     row: ActionAuditRow
+    effective_user: str
 
 
 class PrepareActionRequest(BaseModel):

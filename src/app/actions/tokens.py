@@ -15,7 +15,7 @@ from actions.models import PrepareTokenPayload
 if TYPE_CHECKING:
     from config import Settings
 
-_SUPPORTED_VERSION = 1
+_SUPPORTED_VERSION = 2
 
 
 class PrepareTokenSigner:

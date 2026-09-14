@@ -154,6 +154,7 @@ def test_prepare_token_round_trips_and_detects_tampering():
         action_iri="https://example.com/action",
         action_kind="WRITE_BACK",
         subject_iri="https://example.com/Supplier/1",
+        effective_user="user@example.com",
         params_hash="abc",
         preview_hash="def",
         old_value_hash="ghi",
@@ -182,13 +183,14 @@ def test_prepare_token_rejects_malformed_and_unsupported_payloads():
         action_iri="https://example.com/action",
         action_kind="WRITE_BACK",
         subject_iri="https://example.com/Supplier/1",
+        effective_user="user@example.com",
         params_hash="abc",
         preview_hash="def",
         old_value_hash="ghi",
         issued_at=1_000,
         expires_at=1_600,
         catalog_fingerprint="catalog",
-        version=2,
+        version=3,
     )
     with pytest.raises(ValueError, match="unsupported"):
         signer.sign(payload)
@@ -198,7 +200,7 @@ def test_audit_logger_inserts_with_user_token():
     calls = []
     logger = ActionAuditLogger(
         settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
-        sql_runner=lambda sql, token, settings, parameters=None: (
+        sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters)) or ([], [])
         ),
     )
@@ -229,7 +231,7 @@ def test_audit_logger_inserts_with_user_token():
     assert "params_json, preview_json, result_json" in calls[0][0]
     assert calls[0][2]["old_value"] == "old"
     assert calls[0][2]["new_value"] == "new"
-    assert "current_user()" in calls[0][0]
+    assert "session_user()" in calls[0][0]
 
 
 def test_audit_logger_reads_prepared_row_with_user_token():
@@ -255,6 +257,7 @@ def test_audit_logger_reads_prepared_row_with_user_token():
         "preview_json",
         "result_json",
         "error_message",
+        "effective_user",
     ]
     row = (
         "audit_1",
@@ -277,10 +280,11 @@ def test_audit_logger_reads_prepared_row_with_user_token():
         '{"old_value":"old","new_value":"new"}',
         None,
         None,
+        "user@example.com",
     )
     logger = ActionAuditLogger(
         settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
-        sql_runner=lambda sql, token, settings, parameters=None: (
+        sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters)) or (columns, [row])
         ),
     )
@@ -289,9 +293,11 @@ def test_audit_logger_reads_prepared_row_with_user_token():
 
     assert record is not None
     assert record.audit_id == "audit_1"
+    assert record.effective_user == "user@example.com"
     assert record.row.preview_json == '{"old_value":"old","new_value":"new"}'
     assert calls[0][1] == "user-token"
     assert calls[0][2] == {"prepare_id": "prepare_1"}
+    assert "effective_user = session_user()" in calls[0][0]
 
 
 def test_audit_logger_reads_confirmation_history_with_user_token():
@@ -317,6 +323,7 @@ def test_audit_logger_reads_confirmation_history_with_user_token():
         "preview_json",
         "result_json",
         "error_message",
+        "effective_user",
     ]
     rows = [
         (
@@ -340,6 +347,7 @@ def test_audit_logger_reads_confirmation_history_with_user_token():
             "{}",
             None,
             None,
+            "user@example.com",
         ),
         (
             "audit_3",
@@ -362,11 +370,12 @@ def test_audit_logger_reads_confirmation_history_with_user_token():
             "{}",
             '{"status":"COMPLETED"}',
             None,
+            "user@example.com",
         ),
     ]
     logger = ActionAuditLogger(
         settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
-        sql_runner=lambda sql, token, settings, parameters=None: (
+        sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters)) or (columns, rows)
         ),
     )
@@ -374,8 +383,10 @@ def test_audit_logger_reads_confirmation_history_with_user_token():
     history = logger.get_confirmation_history("prepare_1", "user-token")
 
     assert [record.audit_id for record in history] == ["audit_2", "audit_3"]
+    assert {record.effective_user for record in history} == {"user@example.com"}
     assert calls[0][1] == "user-token"
     assert calls[0][2] == {"prepare_id": "prepare_1"}
+    assert "effective_user = session_user()" in calls[0][0]
 
 
 def test_audit_logger_requires_a_configured_table():
