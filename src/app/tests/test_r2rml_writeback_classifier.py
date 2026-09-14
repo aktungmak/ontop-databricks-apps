@@ -124,6 +124,95 @@ def test_classifier_blocks_coupled_source_column():
     assert "COUPLED_SOURCE_COLUMN" in classification.reasons
 
 
+def test_classifier_blocks_case_variant_identity_column():
+    mapping = Graph().parse(
+        data="""
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ont: <https://example.com/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ont:SupplierMap a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "cat.sch.supplier" ] ;
+  rr:subjectMap [
+    rr:class ont:Supplier ;
+    rr:template "https://example.com/ontology/Supplier/{ID}"
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ont:supplierName ;
+    rr:objectMap [ rr:column "id" ; rr:datatype xsd:string ]
+  ] .
+""",
+        format="turtle",
+    )
+
+    catalog = classify_writeback(mapping, None, [_action()])
+
+    classification = catalog.property_for(
+        "https://example.com/ontology#Supplier",
+        "https://example.com/ontology#supplierName",
+    )
+    assert classification is not None
+    assert classification.writable is False
+    assert "IDENTITY_COLUMN_UPDATE" in classification.reasons
+
+
+def test_classifier_blocks_case_variant_coupled_source_columns():
+    mapping = Graph().parse(
+        data="""
+@prefix rr: <http://www.w3.org/ns/r2rml#> .
+@prefix ont: <https://example.com/ontology#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ont:SupplierMap a rr:TriplesMap ;
+  rr:logicalTable [ rr:tableName "cat.sch.supplier" ] ;
+  rr:subjectMap [
+    rr:class ont:Supplier ;
+    rr:template "https://example.com/ontology/Supplier/{supplier_id}"
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ont:supplierName ;
+    rr:objectMap [ rr:column "Supplier_Name" ; rr:datatype xsd:string ]
+  ] ;
+  rr:predicateObjectMap [
+    rr:predicate ont:supplierDisplayName ;
+    rr:objectMap [ rr:column "supplier_name" ; rr:datatype xsd:string ]
+  ] .
+""",
+        format="turtle",
+    )
+    actions = [
+        _action(),
+        ActionDefinition(
+            iri="https://example.com/ontology#updateSupplierDisplayName",
+            logical_key="updateSupplierDisplayName",
+            kind="WRITE_BACK",
+            bound_class_iri="https://example.com/ontology#Supplier",
+            target_property_iri="https://example.com/ontology#supplierDisplayName",
+            status="PUBLISHED",
+        ),
+    ]
+
+    catalog = classify_writeback(mapping, None, actions)
+
+    classifications = [
+        catalog.property_for(
+            "https://example.com/ontology#Supplier",
+            property_iri,
+        )
+        for property_iri in (
+            "https://example.com/ontology#supplierName",
+            "https://example.com/ontology#supplierDisplayName",
+        )
+    ]
+    assert all(item is not None for item in classifications)
+    assert all(item.writable is False for item in classifications if item is not None)
+    assert all(
+        "COUPLED_SOURCE_COLUMN" in item.reasons
+        for item in classifications
+        if item is not None
+    )
+
+
 def test_classifier_blocks_iri_term_type_without_ontology():
     mapping = Graph().parse(
         data=MAPPING.replace(

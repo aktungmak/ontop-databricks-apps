@@ -309,9 +309,9 @@ def _parse_sql_shape(sql: str) -> _SqlShape:
             raise _SqlShapeError("JOINED_OR_COMPUTED_QUERY")
         seen_aliases.add(normalized_alias)
         if isinstance(projection.this, exp.Column) and not projection.this.table:
-            alias_to_column[projection.alias] = projection.this.name
+            alias_to_column[normalized_alias] = projection.this.name
         else:
-            non_column_aliases.add(projection.alias)
+            non_column_aliases.add(normalized_alias)
     return _SqlShape(
         table_fqn,
         alias_to_column,
@@ -353,28 +353,26 @@ def _reasons_for_pair(
     ):
         reasons.append("NOT_DATATYPE_PROPERTY")
     if candidate.key_alias is not None:
-        if candidate.key_alias in candidate.non_column_aliases:
+        key_alias = _identifier_key(candidate.key_alias)
+        if key_alias in candidate.non_column_aliases:
             reasons.append("KEY_MAPPING_NOT_PLAIN_COLUMN")
-        elif (
-            candidate.key_alias not in candidate.alias_to_column
-            and candidate.alias_to_column
-        ):
+        elif key_alias not in candidate.alias_to_column and candidate.alias_to_column:
             reasons.append("KEY_MAPPING_NOT_PLAIN_COLUMN")
     if candidate.has_computed_projection:
         reasons.append("JOINED_OR_COMPUTED_QUERY")
     if candidate.where_not_null_column is not None and candidate.key_alias is not None:
         key_column = candidate.alias_to_column.get(
-            candidate.key_alias, candidate.key_alias
+            _identifier_key(candidate.key_alias), candidate.key_alias
         )
-        if key_column != candidate.where_not_null_column:
+        if _identifier_key(key_column) != _identifier_key(
+            candidate.where_not_null_column
+        ):
             reasons.append("JOINED_OR_COMPUTED_QUERY")
     if candidate.value_alias is not None:
-        if candidate.value_alias in candidate.non_column_aliases:
+        value_alias = _identifier_key(candidate.value_alias)
+        if value_alias in candidate.non_column_aliases:
             reasons.append("VALUE_MAPPING_NOT_PLAIN_COLUMN")
-        elif (
-            candidate.value_alias not in candidate.alias_to_column
-            and candidate.alias_to_column
-        ):
+        elif value_alias not in candidate.alias_to_column and candidate.alias_to_column:
             reasons.append("VALUE_MAPPING_NOT_PLAIN_COLUMN")
     if coupled:
         reasons.append("COUPLED_SOURCE_COLUMN")
@@ -389,8 +387,13 @@ def _coupled_pairs(properties: Sequence[_PropertyMap]) -> set[tuple[str, str]]:
         if property_map.table_fqn is None:
             continue
         for source_alias in property_map.source_aliases:
-            value_column = property_map.alias_to_column.get(source_alias, source_alias)
-            source = (*property_map.table_fqn, value_column)
+            value_column = property_map.alias_to_column.get(
+                _identifier_key(source_alias), source_alias
+            )
+            source = tuple(
+                _identifier_key(identifier)
+                for identifier in (*property_map.table_fqn, value_column)
+            )
             by_source.setdefault(source, set()).add(
                 (property_map.class_iri, property_map.property_iri)
             )
@@ -412,9 +415,11 @@ def _target_for_pair(
         or candidate.subject_template is None
     ):
         return None
-    key_column = candidate.alias_to_column.get(candidate.key_alias, candidate.key_alias)
+    key_column = candidate.alias_to_column.get(
+        _identifier_key(candidate.key_alias), candidate.key_alias
+    )
     value_column = candidate.alias_to_column.get(
-        candidate.value_alias, candidate.value_alias
+        _identifier_key(candidate.value_alias), candidate.value_alias
     )
     return WriteBackTarget(
         action_iri=action.iri,
@@ -433,9 +438,13 @@ def _target_for_pair(
 def _same_identity_and_value(candidate: _PropertyMap) -> bool:
     if candidate.key_alias is None or candidate.value_alias is None:
         return False
-    key = candidate.alias_to_column.get(candidate.key_alias, candidate.key_alias)
-    value = candidate.alias_to_column.get(candidate.value_alias, candidate.value_alias)
-    return key == value
+    key = candidate.alias_to_column.get(
+        _identifier_key(candidate.key_alias), candidate.key_alias
+    )
+    value = candidate.alias_to_column.get(
+        _identifier_key(candidate.value_alias), candidate.value_alias
+    )
+    return _identifier_key(key) == _identifier_key(value)
 
 
 def _has_unsupported_object_shape(graph: Graph, object_map: object) -> bool:
@@ -476,6 +485,11 @@ def _table_fqn(table_name: str | None) -> tuple[str, str, str] | None:
         return None
     parts = [part.strip().strip("`") for part in table_name.split(".")]
     return tuple(parts) if len(parts) == 3 and all(parts) else None  # type: ignore[return-value]
+
+
+def _identifier_key(value: str) -> str:
+    """Return the comparison key for an unquoted Databricks identifier."""
+    return value.casefold()
 
 
 def _string(value: object) -> str | None:
