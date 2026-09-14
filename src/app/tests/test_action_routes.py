@@ -189,7 +189,7 @@ def test_action_service_filters_catalog_actions_by_metadata() -> None:
             fm_model_name="test-model",
         ),
         token_signer=PrepareTokenSigner("secret"),
-        audit_recorder=lambda _row, _token: "audit_1",
+        audit_recorder=lambda _row, _token, _effective_user, _timeout: "audit_1",
     )
 
     assert [

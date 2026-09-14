@@ -186,6 +186,7 @@ def test_execute_sparql_query_forwards_statement_timeout() -> None:
 
     assert isinstance(result, SparqlExecuteSuccess)
     assert observed_timeouts == [31]
+    assert client.post.await_args.kwargs["timeout"] == 31
 
 
 def test_ontop_not_running_returns_503() -> None:

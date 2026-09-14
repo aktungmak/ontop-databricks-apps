@@ -170,7 +170,9 @@ GRANT INSERT, SELECT ON TABLE <catalog>.<schema>.<audit_table> TO `<principal>`;
 ```
 
 The corresponding `USE CATALOG` and `USE SCHEMA` grants are also required.
-Create the audit table with this v1 shape:
+Create the audit table with this v1 shape. The `integrity_tag` authenticates
+every runtime-authoritative field with a domain-separated HMAC derived from
+`VKG_ACTION_CONFIRM_SIGNING_KEY`:
 
 ```sql
 CREATE TABLE <catalog>.<schema>.<audit_table> (
@@ -180,14 +182,40 @@ CREATE TABLE <catalog>.<schema>.<audit_table> (
   idempotency_key STRING, source_table STRING, source_key_column STRING,
   source_value_column STRING, old_value VARIANT, new_value VARIANT,
   params_json STRING, preview_json STRING, result_json STRING,
-  error_message STRING, effective_user STRING, created_at TIMESTAMP
+  error_message STRING, effective_user STRING, integrity_tag STRING,
+  created_at TIMESTAMP
 );
 ```
 
-`effective_user` is populated from `session_user()` by the app's audit insert,
-and audit recovery queries restrict rows to that same session principal.
-Primary-key and unique constraints on Delta tables are informational, so this
-audit table is replay evidence rather than an external-effect uniqueness
+Before granting action users access, attach a Unity Catalog row filter owned by
+a security administrator. Action users must not own the table or filter
+function and must not receive `MANAGE` on either object:
+
+```sql
+CREATE FUNCTION <catalog>.<schema>.vkg_action_audit_actor_filter(
+  row_effective_user STRING
+)
+RETURNS BOOLEAN
+RETURN row_effective_user = session_user();
+
+ALTER TABLE <catalog>.<schema>.<audit_table>
+SET ROW FILTER <catalog>.<schema>.vkg_action_audit_actor_filter
+ON (effective_user);
+```
+
+The row filter is mandatory: the runtime's `WHERE effective_user =
+session_user()` predicates do not prevent a user with direct table access from
+issuing a broader query. `effective_user` is populated from `session_user()` by
+the app's audit insert, and every recovery read verifies the row HMAC before it
+can be used as preparation or replay evidence. The redundant `old_value` and
+`new_value` VARIANT projections are informational; their canonical values are
+authenticated inside `preview_json` or `result_json`. Directly inserted,
+altered, or legacy unsigned authoritative data fails closed. Existing deployments must add
+`integrity_tag`, archive or discard unsigned rows, and attach the row filter
+before upgrading the app.
+
+Primary-key and unique constraints on Delta tables are informational, so the
+audit table remains replay evidence rather than an external-effect uniqueness
 mechanism.
 
 ### REST API

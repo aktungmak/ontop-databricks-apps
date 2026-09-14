@@ -256,11 +256,15 @@ async def execute_sparql_query(
         )
 
     target = f"http://127.0.0.1:{settings.ontop_internal_port}/ontop/reformulate"
+    request_options: dict[str, object] = {}
+    if statement_timeout_seconds is not None:
+        request_options["timeout"] = statement_timeout_seconds
     try:
         upstream = await http_client.post(
             target,
             headers=_REFORMULATE_HEADERS,
             content=urlencode({"query": query}).encode("utf-8"),
+            **request_options,
         )
     except httpx.RequestError:
         logger.exception("Failed to reformulate POST request at %s", target)

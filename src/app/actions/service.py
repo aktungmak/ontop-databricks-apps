@@ -38,7 +38,7 @@ from config import Settings
 SqlRunner = Callable[
     [str, str, Settings, Mapping[str, object] | None], tuple[list[str], list[tuple]]
 ]
-AuditRecorder = Callable[[ActionAuditRow, str, int | None], str]
+AuditRecorder = Callable[[ActionAuditRow, str, str, int | None], str]
 AuditLookup = Callable[[str, str, int | None], ActionAuditRecord | None]
 AuditHistoryLookup = Callable[[str, str, int | None], list[ActionAuditRecord]]
 ActorResolver = Callable[[str, Settings, int | None], str]
@@ -279,6 +279,7 @@ class ActionService:
                 audit_id = self._record(
                     self._audit_row("PREPARE", "PREPARED", action, pending, None),
                     token,
+                    effective_user,
                 )
                 prepared = _PreparedAction(
                     prepare_id=prepare_id,
@@ -299,6 +300,7 @@ class ActionService:
                     "PREPARE", "FAILED", action, pending, None, exc.message
                 ),
                 token,
+                effective_user,
             )
             raise
 
@@ -446,9 +448,18 @@ class ActionService:
                 None,
                 error,
                 token,
+                effective_user=effective_user,
             )
             raise error
         if action.kind == "EXTERNAL":
+            replayed = await asyncio.to_thread(
+                self._replay_if_terminal_sync,
+                action,
+                payload,
+                token,
+            )
+            if replayed is not None:
+                return replayed
             try:
                 await self._check_external_subject(
                     action,
@@ -485,11 +496,38 @@ class ActionService:
             self._record_confirm_refusal(action, payload, None, exc, token)
             raise
         with self._confirmation_lock(payload.prepare_id):
-            return self._confirm_locked(action, payload, token)
+            response = self._confirm_locked(action, payload, token)
+        if response is None:
+            raise RuntimeError("confirmation execution did not produce a response")
+        return response
+
+    def _replay_if_terminal_sync(
+        self,
+        action: ActionDefinition,
+        payload: PrepareTokenPayload,
+        token: str,
+    ) -> ConfirmActionResponse | None:
+        try:
+            self._require_published(action)
+        except ActionError as exc:
+            self._record_confirm_refusal(action, payload, None, exc, token)
+            raise
+        with self._confirmation_lock(payload.prepare_id):
+            return self._confirm_locked(
+                action,
+                payload,
+                token,
+                replay_only=True,
+            )
 
     def _confirm_locked(
-        self, action: ActionDefinition, payload: PrepareTokenPayload, token: str
-    ) -> ConfirmActionResponse:
+        self,
+        action: ActionDefinition,
+        payload: PrepareTokenPayload,
+        token: str,
+        *,
+        replay_only: bool = False,
+    ) -> ConfirmActionResponse | None:
         if action.kind != payload.action_kind:
             error = ActionConflictError("action definition changed since prepare")
             self._record_confirm_refusal(action, payload, None, error, token)
@@ -515,6 +553,8 @@ class ActionService:
             error = ActionConflictError("action definition changed since prepare")
             self._record_confirm_refusal(action, payload, prepared, error, token)
             raise error
+        if replay_only:
+            return None
 
         if action.kind == "WRITE_BACK":
             result, audit_ids = self._confirm_writeback(
@@ -594,7 +634,9 @@ class ActionService:
             self._record_confirm_refusal(action, payload, prepared, error, token)
             raise error
         confirming_id = self._record(
-            self._audit_row("CONFIRM", "CONFIRMING", action, prepared, payload), token
+            self._audit_row("CONFIRM", "CONFIRMING", action, prepared, payload),
+            token,
+            prepared.effective_user,
         )
         new_value = prepared.preview["new_value"]
         statement = (
@@ -625,6 +667,7 @@ class ActionService:
                     "action execution failed",
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionUnavailableError("action execution failed") from exc
         affected_rows = _affected_rows(columns, rows)
@@ -639,6 +682,7 @@ class ActionService:
                     "could not verify affected rows",
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionUnavailableError(
                 "could not verify action execution", confirming_id
@@ -654,6 +698,7 @@ class ActionService:
                     "guarded update did not affect exactly one row",
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionConflictError(
                 "source value changed during update", confirming_id
@@ -665,6 +710,7 @@ class ActionService:
                     "CONFIRM", "COMPLETED", action, prepared, payload, result=result
                 ),
                 token,
+                prepared.effective_user,
             )
         except ActionUnavailableError as exc:
             raise ActionUnavailableError(
@@ -686,6 +732,7 @@ class ActionService:
         confirming_id = self._record(
             self._audit_row("CONFIRM", "CONFIRMING", action, prepared, payload),
             token,
+            prepared.effective_user,
         )
         try:
             columns, rows = self._sql_runner(
@@ -711,6 +758,7 @@ class ActionService:
                     "action execution failed",
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionUnavailableError("action execution failed") from exc
         result = _result(columns, rows)
@@ -729,6 +777,7 @@ class ActionService:
                     result,
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionUnavailableError(
                 "external function returned an invalid idempotency envelope",
@@ -751,6 +800,7 @@ class ActionService:
                     result,
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionConflictError(
                 "external action idempotency conflict",
@@ -768,6 +818,7 @@ class ActionService:
                     result,
                 ),
                 token,
+                prepared.effective_user,
             )
             return (
                 "FAILED",
@@ -790,6 +841,7 @@ class ActionService:
                     result,
                 ),
                 token,
+                prepared.effective_user,
             )
             raise ActionUnavailableError(
                 "external function returned an invalid result envelope", failed_id
@@ -800,6 +852,7 @@ class ActionService:
                     "CONFIRM", "COMPLETED", action, prepared, payload, result=result
                 ),
                 token,
+                prepared.effective_user,
             )
         except ActionUnavailableError as exc:
             raise ActionUnavailableError(
@@ -978,6 +1031,8 @@ class ActionService:
         prepared: _PreparedAction | None,
         error: ActionError,
         token: str,
+        *,
+        effective_user: str | None = None,
     ) -> str:
         if prepared is not None:
             row = self._audit_row(
@@ -996,7 +1051,11 @@ class ActionService:
                 old_value_hash=payload.old_value_hash or None,
                 error_message=error.message,
             )
-        audit_id = self._record(row, token)
+        audit_id = self._record(
+            row,
+            token,
+            effective_user or payload.effective_user,
+        )
         error.audit_id = audit_id
         return audit_id
 
@@ -1043,14 +1102,24 @@ class ActionService:
             raise ActionConflictError("source row is missing or ambiguous")
         return rows[0][0]
 
-    def _record(self, row: ActionAuditRow, token: str) -> str:
+    def _record(
+        self,
+        row: ActionAuditRow,
+        token: str,
+        effective_user: str,
+    ) -> str:
         try:
             action = next(
                 (item for item in self._catalog.actions if item.iri == row.action_iri),
                 None,
             )
             timeout_seconds = action.timeout_seconds if action is not None else None
-            return self._audit_recorder(row, token, timeout_seconds)
+            return self._audit_recorder(
+                row,
+                token,
+                effective_user,
+                timeout_seconds,
+            )
         except Exception as exc:
             raise ActionUnavailableError("could not record action audit event") from exc
 
@@ -1150,8 +1219,61 @@ class ActionService:
                 params=params,
                 idempotency_key=row.idempotency_key,
             )
-        except (TypeError, ValueError) as exc:
+            if action.kind == "EXTERNAL":
+                self._validate_external_params(action, params)
+                expected_preview = {
+                    "function_fqn": action.function_fqn or "",
+                    "subject_iri": prepared_request.subject_iri,
+                    "params": params,
+                    "idempotency_key": prepared_request.idempotency_key,
+                }
+                expected_source = (None, None, None)
+            else:
+                target = self._writeback_target(action)
+                expected_preview = {
+                    "subject_iri": prepared_request.subject_iri,
+                    "property_iri": target.property_iri,
+                    "old_value": old_value,
+                    "new_value": _validate_writeback_value(
+                        params.get("newValue"), target.datatype_iri
+                    ),
+                    "source": {
+                        "table": ".".join(target.table_fqn),
+                        "key_column": target.key_column,
+                        "value_column": target.value_column,
+                    },
+                }
+                expected_source = (
+                    ".".join(target.table_fqn),
+                    target.key_column,
+                    target.value_column,
+                )
+        except (ActionError, TypeError, ValueError) as exc:
             raise ActionConflictError("prepared action audit is invalid") from exc
+        expected_old_value_hash = (
+            _hash(old_value) if action.kind == "WRITE_BACK" else ""
+        )
+        if (
+            row.prepare_id != _prepare_id(invocation_id)
+            or row.params_hash != _hash(params)
+            or row.preview_hash != _hash(preview)
+            or (row.old_value_hash or "") != expected_old_value_hash
+            or row.result_json is not None
+            or row.error_message is not None
+            or preview != expected_preview
+            or (
+                row.source_table,
+                row.source_key_column,
+                row.source_value_column,
+            )
+            != expected_source
+            or (
+                action.idempotency_strategy == "REQUEST_KEY"
+                and invocation_id
+                != _invocation_id(action, prepared_request, record.effective_user)
+            )
+        ):
+            raise ActionConflictError("prepared action audit is invalid")
         return _PreparedAction(
             prepare_id=row.prepare_id or "",
             action=action,

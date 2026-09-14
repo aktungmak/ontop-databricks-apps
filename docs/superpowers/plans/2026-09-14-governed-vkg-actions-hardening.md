@@ -347,11 +347,11 @@ Replace any `current_user()` examples with `session_user()`. State that the audi
 Run:
 
 ```bash
-uv run --project src/app pytest src/app/tests -q
-uv run --project src/app ruff check src/app
-uv run --project src/app ruff format --check src/app
-python -m compileall -q src/app scripts/live-action-e2e.py
-python scripts/live-action-e2e.py --help
+(cd src/app && uv run python -m pytest tests -q)
+(cd src/app && uv run ruff check .)
+git diff -z --name-only origin/main...HEAD -- '*.py' | xargs -0 uv run --project src/app ruff format --check
+uv run --project src/app python -m compileall -q src/app scripts/live-action-e2e.py
+uv run --project src/app python scripts/live-action-e2e.py --help
 ```
 
 Expected: all tests and checks pass with no new warnings or errors.
@@ -377,6 +377,15 @@ git add README.md mappings/samples/actions.ttl scripts/live-action-e2e.py src/ap
 git commit -m "docs: finalize governed action contract"
 ```
 
-- [ ] **Step 6: Review the final diff and open the one PR**
+- [x] **Step 6: Address final security and reliability review**
+
+Authenticate persisted audit evidence with an actor-bound, domain-separated
+HMAC; require a Unity Catalog row filter for audit confidentiality; strictly
+validate recovered preparation data against the current request and target;
+replay terminal external outcomes before mutable subject checks; bound Ontop
+HTTP reformulation with the action timeout; and align the live audit DDL with
+the documented `VARIANT` columns.
+
+- [ ] **Step 7: Review the final diff and open the one PR**
 
 Review `git diff --stat origin/main...HEAD` and `git diff origin/main...HEAD` for customer identifiers, secrets, UI code, and unrelated changes. Push `feat/governed-vkg-actions` to the user's fork and open one pull request against `aktungmak/ontop-databricks-apps:main` describing all five hardening fixes and the verification evidence.

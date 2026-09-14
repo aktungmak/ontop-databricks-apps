@@ -67,6 +67,7 @@ def main() -> None:
     run_id = args.run_id
     source_table = f"supplier_action_source_{run_id}"
     audit_table = f"vkg_action_audit_{run_id}"
+    audit_filter_function = f"vkg_action_audit_filter_{run_id}"
     external_function = f"submit_supplier_review_{run_id}"
 
     fqn = _Fqn(catalog, schema)
@@ -81,6 +82,7 @@ def main() -> None:
             fqn,
             source_table=source_table,
             audit_table=audit_table,
+            audit_filter_function=audit_filter_function,
             external_function=external_function,
         )
         service = _action_service(
@@ -180,6 +182,10 @@ def main() -> None:
         if args.keep_resources:
             print(f"Kept source table: {source_fqn}")
             print(f"Kept audit table: {audit_fqn}")
+            print(
+                "Kept audit filter function: "
+                f"{fqn.schema_fqn}.`{audit_filter_function}`"
+            )
             print(f"Kept external function: {fqn.schema_fqn}.`{external_function}`")
     finally:
         if not args.keep_resources:
@@ -188,6 +194,7 @@ def main() -> None:
                 fqn,
                 source_table=source_table,
                 audit_table=audit_table,
+                audit_filter_function=audit_filter_function,
                 external_function=external_function,
             )
 
@@ -271,11 +278,15 @@ def _setup_uc_objects(
     *,
     source_table: str,
     audit_table: str,
+    audit_filter_function: str,
     external_function: str,
 ) -> None:
     client.execute(f"CREATE SCHEMA IF NOT EXISTS {fqn.schema_fqn}")
     client.execute(f"DROP FUNCTION IF EXISTS {fqn.schema_fqn}.`{external_function}`")
     client.execute(f"DROP TABLE IF EXISTS {fqn.schema_fqn}.`{audit_table}`")
+    client.execute(
+        f"DROP FUNCTION IF EXISTS {fqn.schema_fqn}.`{audit_filter_function}`"
+    )
     client.execute(f"DROP TABLE IF EXISTS {fqn.schema_fqn}.`{source_table}`")
     client.execute(
         f"""
@@ -309,15 +320,32 @@ def _setup_uc_objects(
           source_table STRING,
           source_key_column STRING,
           source_value_column STRING,
-          old_value STRING,
-          new_value STRING,
+          old_value VARIANT,
+          new_value VARIANT,
           params_json STRING,
           preview_json STRING,
           result_json STRING,
           error_message STRING,
           effective_user STRING,
+          integrity_tag STRING,
           created_at TIMESTAMP
         )
+        """
+    )
+    client.execute(
+        f"""
+        CREATE FUNCTION {fqn.schema_fqn}.`{audit_filter_function}`(
+          row_effective_user STRING
+        )
+        RETURNS BOOLEAN
+        RETURN row_effective_user = session_user()
+        """
+    )
+    client.execute(
+        f"""
+        ALTER TABLE {fqn.schema_fqn}.`{audit_table}`
+        SET ROW FILTER {fqn.schema_fqn}.`{audit_filter_function}`
+        ON (effective_user)
         """
     )
     client.execute(
@@ -358,10 +386,14 @@ def _cleanup_uc_objects(
     *,
     source_table: str,
     audit_table: str,
+    audit_filter_function: str,
     external_function: str,
 ) -> None:
     client.execute(f"DROP FUNCTION IF EXISTS {fqn.schema_fqn}.`{external_function}`")
     client.execute(f"DROP TABLE IF EXISTS {fqn.schema_fqn}.`{audit_table}`")
+    client.execute(
+        f"DROP FUNCTION IF EXISTS {fqn.schema_fqn}.`{audit_filter_function}`"
+    )
     client.execute(f"DROP TABLE IF EXISTS {fqn.schema_fqn}.`{source_table}`")
 
 

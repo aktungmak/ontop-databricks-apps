@@ -92,7 +92,9 @@ def _external_result(parameters, status="COMPLETED", **values):
 
 def _service(
     sql_runner,
-    audit_recorder=lambda row, token, timeout_seconds=None: "audit",
+    audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
+        "audit"
+    ),
     audit_lookup=None,
     audit_history_lookup=None,
     actor_resolver=_test_actor_resolver,
@@ -119,7 +121,9 @@ def _service(
 
 def _external_service(
     sql_runner,
-    audit_recorder=lambda row, token, timeout_seconds=None: "audit",
+    audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
+        "audit"
+    ),
     audit_lookup=None,
     audit_history_lookup=None,
     actor_resolver=_test_actor_resolver,
@@ -164,7 +168,7 @@ class _AuditStore:
         self.records: list[ActionAuditRecord] = []
         self._lock = threading.Lock()
 
-    def record(self, row, token, timeout_seconds=None):
+    def record(self, row, token, effective_user=None, timeout_seconds=None):
         assert token == "user-token"
         with self._lock:
             record = ActionAuditRecord(
@@ -204,7 +208,7 @@ def test_prepare_writeback_reads_old_value_and_writes_audit():
         sql_runner=lambda sql, token, settings, parameters=None, **_: (
             sql_calls.append((sql, token, parameters)) or (["old_value"], [("old",)])
         ),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or "audit_prepare"
         ),
     )
@@ -282,7 +286,7 @@ def test_action_timeout_applies_to_sql_and_audit_operations():
             return ["old_value"], [("old",)]
         return ["num_affected_rows"], [(1,)]
 
-    def recorder(row, token, timeout_seconds=None):
+    def recorder(row, token, effective_user=None, timeout_seconds=None):
         audit_timeouts.append(timeout_seconds)
         return f"audit_{row.status}"
 
@@ -301,12 +305,33 @@ def test_action_timeout_applies_to_sql_and_audit_operations():
     assert audit_timeouts == [60, 60, 60]
 
 
+def test_action_audits_are_signed_for_the_resolved_actor():
+    observed = []
+
+    def recorder(row, token, effective_user=None, timeout_seconds=None):
+        observed.append((row.status, token, effective_user, timeout_seconds))
+        return f"audit_{row.status}"
+
+    service = _service(
+        lambda sql, token, settings, parameters=None, **_: (
+            ["old_value"],
+            [("old",)],
+        ),
+        audit_recorder=recorder,
+        actor_resolver=lambda *_: "user@example.com",
+    )
+
+    asyncio.run(service.prepare(_prepare_request(), token="user-token"))
+
+    assert observed == [("PREPARED", "user-token", "user@example.com", 60)]
+
+
 def test_confirm_writeback_rejects_stale_value():
     reads = iter([(["old_value"], [("old",)]), (["old_value"], [("changed",)])])
     audit_rows = []
     service = _service(
         sql_runner=lambda sql, token, settings, parameters=None, **_: next(reads),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or f"audit_{len(audit_rows)}"
         ),
     )
@@ -484,7 +509,7 @@ def test_prepare_requires_idempotency_key_for_request_key_actions():
     audit_rows = []
     service = _external_service(
         lambda sql, token, settings, parameters=None, **_: ([], []),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or "audit_failed"
         ),
     )
@@ -677,6 +702,47 @@ def test_repeated_prepare_after_restart_reuses_persisted_preparation():
     ] == [store.records[0]]
 
 
+def test_repeated_prepare_rejects_recovered_preview_that_differs_from_request():
+    store = _AuditStore()
+    request = PrepareActionRequest(
+        action_iri="https://example.com/ontology#createPurchaseOrder",
+        subject_iri="https://example.com/ontology/SourcingBundle/B1",
+        params={"quantity": 2},
+        idempotency_key="request-1",
+    )
+    first_service = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], []),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+    )
+    asyncio.run(first_service.prepare(request, token="user-token"))
+    stored = store.records[0]
+    store.records[0] = replace(
+        stored,
+        row=replace(
+            stored.row,
+            preview_json=(
+                '{"function_fqn":"cat.sch.create_purchase_order",'
+                '"idempotency_key":"request-1","params":{"quantity":999},'
+                '"subject_iri":"https://example.com/ontology/SourcingBundle/B1"}'
+            ),
+            preview_hash=(
+                "061d338ff6f9500c467e8d0d47c4850f84860797e81f01c7653a91c647240b41"
+            ),
+        ),
+    )
+    restarted = _external_service(
+        lambda sql, token, settings, parameters=None, **_: ([], []),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+    )
+
+    with pytest.raises(ActionConflictError, match="prepared action audit is invalid"):
+        asyncio.run(restarted.prepare(request, token="user-token"))
+
+
 def test_external_result_must_echo_invocation_and_request_hashes():
     service = _external_service(
         lambda sql, token, settings, parameters=None, **_: (
@@ -733,7 +799,7 @@ def test_failed_prepare_read_writes_failure_audit():
         lambda sql, token, settings, parameters=None, **_: (_ for _ in ()).throw(
             RuntimeError("read failed")
         ),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or "audit_failed"
         ),
     )
@@ -779,6 +845,64 @@ def test_repeated_external_confirm_returns_recorded_result_without_reinvocation(
 
     assert repeated == first
     assert invocations == 1
+
+
+def test_completed_external_retry_replays_before_subject_revalidation():
+    store = _AuditStore()
+    subject_checks = []
+    invocations = 0
+
+    async def subject_checker(subject_iri, class_iri, token, timeout_seconds):
+        subject_checks.append((subject_iri, class_iri, token, timeout_seconds))
+        return True
+
+    def runner(sql, token, settings, parameters=None, **_):
+        nonlocal invocations
+        invocations += 1
+        return ["result"], [(_external_result(parameters),)]
+
+    service = _external_service(
+        runner,
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+        subject_checker=subject_checker,
+    )
+    prepared = asyncio.run(
+        service.prepare(
+            PrepareActionRequest(
+                action_iri="https://example.com/ontology#createPurchaseOrder",
+                subject_iri="https://example.com/ontology/SourcingBundle/B1",
+                params={"quantity": 2},
+                idempotency_key="request-1",
+            ),
+            token="user-token",
+        )
+    )
+    request = ConfirmActionRequest(preparation_token=prepared.preparation_token)
+
+    first = asyncio.run(service.confirm(request, token="user-token"))
+    retry_checks = []
+
+    async def missing_subject(subject_iri, class_iri, token, timeout_seconds):
+        retry_checks.append((subject_iri, class_iri, token, timeout_seconds))
+        return False
+
+    restarted = _external_service(
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("completed external action must not be reinvoked")
+        ),
+        audit_recorder=store.record,
+        audit_lookup=store.prepared,
+        audit_history_lookup=store.confirmation,
+        subject_checker=missing_subject,
+    )
+    repeated = asyncio.run(restarted.confirm(request, token="user-token"))
+
+    assert repeated == first
+    assert invocations == 1
+    assert len(subject_checks) == 2
+    assert retry_checks == []
 
 
 def test_repeated_external_confirm_after_restart_uses_audit_outcome():
@@ -942,7 +1066,7 @@ def test_external_failure_envelope_is_audited_and_returned(envelope_status):
                 )
             ],
         ),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append(row) or f"audit_{len(audit_rows)}"
         ),
     )
@@ -988,7 +1112,7 @@ def test_external_malformed_or_unknown_envelope_fails_closed(result):
 
     service = _external_service(
         runner,
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append(row) or f"audit_{len(audit_rows)}"
         ),
     )
@@ -1025,7 +1149,7 @@ def test_confirm_reconstructs_prepared_writeback_from_audit_after_restart():
 
     service = _service(
         runner,
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or "audit_prepare"
         ),
     )
@@ -1053,7 +1177,7 @@ def test_confirm_rejects_audit_data_that_does_not_match_signed_hashes():
     audit_rows = []
     service = _service(
         lambda sql, token, settings, parameters=None, **_: (["old_value"], [("old",)]),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append((row, token)) or "audit_prepare"
         ),
     )
@@ -1070,7 +1194,7 @@ def test_confirm_rejects_audit_data_that_does_not_match_signed_hashes():
         audit_lookup=lambda prepare_id, token, timeout_seconds=None: tampered,
     )
 
-    with pytest.raises(ActionConflictError, match="does not match"):
+    with pytest.raises(ActionConflictError):
         asyncio.run(
             restarted.confirm(
                 ConfirmActionRequest(preparation_token=prepared.preparation_token),
@@ -1086,7 +1210,7 @@ def test_confirm_rejects_audit_idempotency_key_that_does_not_match_token():
             ["old_value"],
             [("old",)],
         ),
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append(row) or "audit_prepare"
         ),
     )
@@ -1104,7 +1228,7 @@ def test_confirm_rejects_audit_idempotency_key_that_does_not_match_token():
         audit_lookup=lambda prepare_id, token, timeout_seconds=None: tampered,
     )
 
-    with pytest.raises(ActionConflictError, match="does not match"):
+    with pytest.raises(ActionConflictError):
         asyncio.run(
             restarted.confirm(
                 ConfirmActionRequest(preparation_token=prepared.preparation_token),
@@ -1123,7 +1247,7 @@ def test_confirm_rejects_zero_row_guarded_update_without_completed_audit():
 
     service = _service(
         runner,
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append(row) or f"audit_{row.status}"
         ),
     )
@@ -1150,7 +1274,7 @@ def test_restart_recovery_uses_typed_old_value_from_preview_json():
 
     service = _service(
         runner,
-        audit_recorder=lambda row, token, timeout_seconds=None: (
+        audit_recorder=lambda row, token, effective_user=None, timeout_seconds=None: (
             audit_rows.append(row) or "audit_prepare"
         ),
     )
@@ -1196,7 +1320,7 @@ def test_catalog_fingerprint_includes_writeback_target():
 
 
 def test_completed_audit_failure_includes_confirming_audit_id():
-    def recorder(row, token, timeout_seconds=None):
+    def recorder(row, token, effective_user=None, timeout_seconds=None):
         if row.status == "COMPLETED":
             raise RuntimeError("audit unavailable")
         return f"audit_{row.status}"

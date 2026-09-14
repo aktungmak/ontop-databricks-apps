@@ -115,7 +115,7 @@ async def ontop_lifespan(app: FastAPI):
         app.state.action_service = ActionService(
             catalog=action_catalog,
             settings=settings,
-            audit_recorder=lambda _row, _token: "",
+            audit_recorder=lambda _row, _token, _effective_user, _timeout: "",
             token_signer=PrepareTokenSigner("actions-unavailable"),
         )
 

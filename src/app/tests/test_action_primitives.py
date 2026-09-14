@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
-from actions.audit import ActionAuditConfigError, ActionAuditLogger
+from actions.audit import ActionAuditConfigError, ActionAuditLogger, _integrity_tag
 from actions.dbsql import quote_fqn, run_user_sql
 from actions.models import ActionAuditRow, PrepareTokenPayload
 from actions.tokens import PrepareTokenSigner
@@ -28,6 +29,29 @@ def _settings(**overrides: object) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def _signed_audit_rows(
+    columns: list[str], rows: list[tuple], secret: str = "audit-secret"
+) -> tuple[list[str], list[tuple]]:
+    signed = []
+    for row in rows:
+        values = dict(zip(columns, row, strict=True))
+        audit_id = str(values.pop("audit_id"))
+        effective_user = str(values.pop("effective_user"))
+        audit_row = ActionAuditRow(**values)
+        signed.append(
+            row
+            + (
+                _integrity_tag(
+                    secret,
+                    audit_id,
+                    effective_user,
+                    audit_row,
+                ),
+            )
+        )
+    return [*columns, "integrity_tag"], signed
 
 
 def test_run_user_sql_uses_forwarded_token(monkeypatch):
@@ -203,7 +227,10 @@ def test_prepare_token_rejects_malformed_and_unsupported_payloads():
 def test_audit_logger_inserts_with_user_token():
     calls = []
     logger = ActionAuditLogger(
-        settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
+        settings=_settings(
+            action_audit_table="cat.sch.vkg_action_audit",
+            action_confirm_signing_key="audit-secret",
+        ),
         sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters)) or ([], [])
         ),
@@ -227,6 +254,7 @@ def test_audit_logger_inserts_with_user_token():
             result_json='{"rows_affected":1}',
         ),
         token="user-token",
+        effective_user="user@example.com",
     )
 
     assert audit_id.startswith("audit_")
@@ -236,6 +264,130 @@ def test_audit_logger_inserts_with_user_token():
     assert calls[0][2]["old_value"] == "old"
     assert calls[0][2]["new_value"] == "new"
     assert "session_user()" in calls[0][0]
+    assert calls[0][2]["effective_user"] == "user@example.com"
+    assert len(calls[0][2]["integrity_tag"]) == 64
+
+
+def test_audit_logger_rejects_unsigned_prepared_row():
+    columns = [
+        "audit_id",
+        "phase",
+        "status",
+        "action_iri",
+        "action_kind",
+        "subject_iri",
+        "prepare_id",
+        "params_hash",
+        "preview_hash",
+        "old_value_hash",
+        "idempotency_key",
+        "source_table",
+        "source_key_column",
+        "source_value_column",
+        "old_value",
+        "new_value",
+        "params_json",
+        "preview_json",
+        "result_json",
+        "error_message",
+        "effective_user",
+    ]
+    row = (
+        "audit_forged",
+        "PREPARE",
+        "PREPARED",
+        "https://example.com/action",
+        "WRITE_BACK",
+        "https://example.com/Supplier/1",
+        "prepare_1",
+        "params",
+        "preview",
+        "oldhash",
+        "request-1",
+        "cat.sch.supplier",
+        "supplier_id",
+        "supplier_name",
+        "old",
+        "new",
+        '{"newValue":"new"}',
+        '{"old_value":"old","new_value":"new"}',
+        None,
+        None,
+        "user@example.com",
+    )
+    logger = ActionAuditLogger(
+        settings=_settings(
+            action_audit_table="cat.sch.vkg_action_audit",
+            action_confirm_signing_key="audit-secret",
+        ),
+        sql_runner=lambda *_args, **_kwargs: (columns, [row]),
+    )
+
+    with pytest.raises(RuntimeError, match="integrity"):
+        logger.get_prepared("prepare_1", "user-token")
+
+
+def test_audit_integrity_tag_is_bound_to_effective_user():
+    row = ActionAuditRow(
+        phase="CONFIRM",
+        status="COMPLETED",
+        action_iri="https://example.com/action",
+        action_kind="EXTERNAL",
+        subject_iri="https://example.com/Supplier/1",
+        prepare_id="prepare_1",
+        result_json='{"status":"COMPLETED"}',
+    )
+
+    first = _integrity_tag("audit-secret", "audit_1", "user-a@example.com", row)
+    second = _integrity_tag("audit-secret", "audit_1", "user-b@example.com", row)
+
+    assert first != second
+
+
+def test_audit_integrity_tag_covers_authoritative_row_fields():
+    row = ActionAuditRow(
+        phase="CONFIRM",
+        status="COMPLETED",
+        action_iri="https://example.com/action",
+        action_kind="EXTERNAL",
+        subject_iri="https://example.com/Supplier/1",
+        prepare_id="prepare_1",
+        result_json='{"status":"COMPLETED"}',
+    )
+
+    completed = _integrity_tag("audit-secret", "audit_1", "user@example.com", row)
+    forged = _integrity_tag(
+        "audit-secret",
+        "audit_1",
+        "user@example.com",
+        replace(row, status="FAILED", result_json='{"status":"FAILED"}'),
+    )
+
+    assert completed != forged
+
+
+def test_audit_integrity_tag_ignores_informational_variant_projections():
+    row = ActionAuditRow(
+        phase="PREPARE",
+        status="PREPARED",
+        action_iri="https://example.com/action",
+        action_kind="WRITE_BACK",
+        subject_iri="https://example.com/Supplier/1",
+        prepare_id="prepare_1",
+        old_value=7,
+        new_value={"nested": True},
+        preview_json='{"new_value":{"nested":true},"old_value":7}',
+    )
+
+    inserted = _integrity_tag("audit-secret", "audit_1", "user@example.com", row)
+    returned = _integrity_tag(
+        "audit-secret",
+        "audit_1",
+        "user@example.com",
+        replace(row, old_value="7", new_value='{"nested":true}'),
+    )
+
+    assert inserted == returned
 
 
 def test_audit_logger_reads_prepared_row_with_user_token():
@@ -286,10 +438,14 @@ def test_audit_logger_reads_prepared_row_with_user_token():
         None,
         "user@example.com",
     )
+    columns, signed_rows = _signed_audit_rows(columns, [row])
     logger = ActionAuditLogger(
-        settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
+        settings=_settings(
+            action_audit_table="cat.sch.vkg_action_audit",
+            action_confirm_signing_key="audit-secret",
+        ),
         sql_runner=lambda sql, token, settings, parameters=None, **_: (
-            calls.append((sql, token, parameters)) or (columns, [row])
+            calls.append((sql, token, parameters)) or (columns, signed_rows)
         ),
     )
 
@@ -377,8 +533,12 @@ def test_audit_logger_reads_confirmation_history_with_user_token():
             "user@example.com",
         ),
     ]
+    columns, rows = _signed_audit_rows(columns, rows)
     logger = ActionAuditLogger(
-        settings=_settings(action_audit_table="cat.sch.vkg_action_audit"),
+        settings=_settings(
+            action_audit_table="cat.sch.vkg_action_audit",
+            action_confirm_signing_key="audit-secret",
+        ),
         sql_runner=lambda sql, token, settings, parameters=None, **_: (
             calls.append((sql, token, parameters)) or (columns, rows)
         ),

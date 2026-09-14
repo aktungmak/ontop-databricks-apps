@@ -58,7 +58,12 @@ Audit reads select and validate `effective_user` and include
 `effective_user = session_user()` in their predicates. This prevents another
 user from loading preparation or confirmation history even if they learn a
 prepare ID. Audit inserts continue deriving `effective_user` from
-`session_user()` rather than trusting a request value.
+`session_user()` rather than trusting a request value. Every authoritative
+audit field is covered by a domain-separated HMAC bound to the audit ID and
+resolved actor; unsigned or altered evidence cannot be recovered or replayed.
+The deployment must also attach an administrator-owned Unity Catalog row filter
+on `effective_user` before granting users direct audit-table access, because a
+query predicate inside the app does not provide table-level confidentiality.
 
 ### External subject precondition
 
@@ -68,10 +73,13 @@ an instance of that class. It uses a bound-subject SPARQL query, the caller's
 forwarded token, and the action timeout. It fails closed when Ontop or DBSQL is
 unavailable.
 
-The check runs at prepare and again at confirm. Absence at prepare is a request
-validation failure. Absence at confirm is a conflict because the semantic state
-changed after the preview. Write-back actions retain their existing subject
-template, source-row, old-value, and guarded-update checks.
+The check runs at prepare and again before a new target invocation at confirm.
+An authenticated terminal result is replayed first, so a retry remains stable
+even if the completed action changed class membership. Absence at prepare is a
+request validation failure. Absence before a new invocation is a conflict
+because the semantic state changed after the preview. Write-back actions retain
+their existing subject template, source-row, old-value, and guarded-update
+checks.
 
 ### Durable external-action idempotency
 
@@ -132,8 +140,9 @@ SET STATEMENT_TIMEOUT = <timeout_seconds>
 
 The parsed per-action `timeoutSeconds` is passed to subject checks, source
 reads, guarded updates, audit operations associated with the action, and
-external-function calls. Timeout failures are sanitized, audited as failures
-when possible, and surfaced as action-unavailable responses.
+external-function calls. Subject checks apply it to both Ontop HTTP
+reformulation and DBSQL execution. Timeout failures are sanitized, audited as
+failures when possible, and surfaced as action-unavailable responses.
 
 ## Confirmation Flow
 
@@ -141,10 +150,13 @@ when possible, and surfaced as action-unavailable responses.
 2. Resolve `session_user()` under the confirming token.
 3. Compare it with the signed preparing actor; refuse mismatches.
 4. Load the current action and require it to remain published.
-5. For external actions, recheck subject membership in `boundClass`.
-6. Load actor-filtered preparation and confirmation audit state.
-7. Verify signed hashes, invocation identity, and catalog fingerprint.
-8. Replay a terminal audit result when available.
+5. Load actor-filtered preparation and confirmation audit state and authenticate
+   every recovered row.
+6. Verify signed hashes, invocation identity, current target metadata, and
+   catalog fingerprint.
+7. Replay a terminal audit result when available.
+8. Before a new external invocation, recheck subject membership in
+   `boundClass`.
 9. Revalidate write-back state or invoke the target with the stable invocation
    ID and request hash.
 10. Validate affected rows or the external result envelope, then record the
