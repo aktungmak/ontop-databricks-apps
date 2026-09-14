@@ -19,6 +19,10 @@ class Settings:
     app_port: int
     work_dir: Path
     fm_model_name: str
+    actions_file: str = "actions.ttl"
+    action_audit_table: str | None = None
+    action_confirm_signing_key: str | None = None
+    action_prepare_ttl_seconds: int = 600
 
     @property
     def warehouse_http_path(self) -> str:
@@ -45,4 +49,14 @@ class Settings:
             app_port=int(os.environ.get("DATABRICKS_APP_PORT", "8000")),
             work_dir=Path("/tmp/ontop-vkg"),
             fm_model_name=os.environ["FM_MODEL_NAME"],
+            actions_file=os.environ.get("VKG_ACTIONS_FILE", "actions.ttl"),
+            action_audit_table=os.environ.get("VKG_ACTION_AUDIT_TABLE", "").strip()
+            or None,
+            action_confirm_signing_key=os.environ.get(
+                "VKG_ACTION_CONFIRM_SIGNING_KEY", ""
+            ).strip()
+            or None,
+            action_prepare_ttl_seconds=int(
+                os.environ.get("VKG_ACTION_PREPARE_TTL_SECONDS", "600")
+            ),
         )

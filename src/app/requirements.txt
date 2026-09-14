@@ -6,5 +6,6 @@ databricks-sql-connector[pyarrow]>=3.0.0
 pydantic>=2.0.0
 openai>=1.52.0
 rdflib>=7.0.0
+sqlglot>=25.0.0,<28.0.0
 rapidfuzz>=3.0.0
 fastmcp>=3.0.0,<4.0.0

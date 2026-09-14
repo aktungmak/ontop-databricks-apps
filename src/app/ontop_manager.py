@@ -47,6 +47,7 @@ class OntopProcessManager:
         self._java_home: Path | None = None
         self._mapping_path: Path | None = None
         self._ontology_path: Path | None = None
+        self._actions_path: Path | None = None
 
     @property
     def is_running(self) -> bool:
@@ -56,6 +57,14 @@ class OntopProcessManager:
     def ontology_path(self) -> Path | None:
         """Local path to the downloaded ontology Turtle, if present."""
         return self._ontology_path
+
+    @property
+    def mapping_path(self) -> Path | None:
+        return self._mapping_path
+
+    @property
+    def actions_path(self) -> Path | None:
+        return self._actions_path
 
     def prepare(self, client: WorkspaceClient) -> None:
         """Download artifacts and mappings from UC volume, extract Ontop bundle."""
@@ -67,7 +76,9 @@ class OntopProcessManager:
         artifacts_dir = self.work_dir / "artifacts"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
 
-        protege_name, cli_name = self._find_ontop_artifact_names(client, artifacts_remote)
+        protege_name, cli_name = self._find_ontop_artifact_names(
+            client, artifacts_remote
+        )
         extract_root = self.work_dir / "bundle-extract"
         if extract_root.exists():
             shutil.rmtree(extract_root)
@@ -155,8 +166,20 @@ class OntopProcessManager:
             download_volume_file(client, ontology_remote, ontology_local)
             self._ontology_path = ontology_local
         except Exception:
-            logger.info("No ontology file at %s — continuing without --ontology", ontology_remote)
+            logger.info(
+                "No ontology file at %s — continuing without --ontology",
+                ontology_remote,
+            )
             self._ontology_path = None
+
+        actions_remote = f"{mappings_remote}/{self.settings.actions_file}"
+        actions_local = self.mappings_dir / self.settings.actions_file
+        try:
+            download_volume_file(client, actions_remote, actions_local)
+            self._actions_path = actions_local
+        except Exception:
+            logger.info("No actions file at %s — continuing read-only", actions_remote)
+            self._actions_path = None
 
         logger.info("Prepared Ontop launcher at %s", self._ontop_binary)
 
@@ -167,9 +190,9 @@ class OntopProcessManager:
         protege_name: str | None = None
         cli_name: str | None = None
         for entry in listing:
-            if entry.name.startswith("ontop-protege-bundle-linux") and entry.name.endswith(
-                ".tar.gz"
-            ):
+            if entry.name.startswith(
+                "ontop-protege-bundle-linux"
+            ) and entry.name.endswith(".tar.gz"):
                 protege_name = entry.name
             elif entry.name.startswith("ontop-cli-") and entry.name.endswith(".zip"):
                 cli_name = entry.name
@@ -182,18 +205,24 @@ class OntopProcessManager:
             f"{artifacts_remote}/. Deploy the bundle to upload artifacts."
         )
 
-    def _find_jre_artifact_name(self, client: WorkspaceClient, artifacts_remote: str) -> str | None:
+    def _find_jre_artifact_name(
+        self, client: WorkspaceClient, artifacts_remote: str
+    ) -> str | None:
         listing = client.files.list_directory_contents(artifacts_remote)
         for entry in listing:
             if "jre" in entry.name.lower() and entry.name.endswith(".tar.gz"):
                 return entry.name
         return None
 
-    def _find_jdbc_artifact_name(self, client: WorkspaceClient, artifacts_remote: str) -> str:
+    def _find_jdbc_artifact_name(
+        self, client: WorkspaceClient, artifacts_remote: str
+    ) -> str:
         """Locate the versioned Databricks JDBC jar (``databricks-jdbc-<version>.jar``)."""
         listing = client.files.list_directory_contents(artifacts_remote)
         for entry in listing:
-            if entry.name.startswith("databricks-jdbc-") and entry.name.endswith(".jar"):
+            if entry.name.startswith("databricks-jdbc-") and entry.name.endswith(
+                ".jar"
+            ):
                 return entry.name
         raise FileNotFoundError(
             f"No databricks-jdbc-*.jar found in {artifacts_remote}/. "
@@ -202,7 +231,9 @@ class OntopProcessManager:
 
     def _find_ontop_artifact_name(self, client: WorkspaceClient, volume: str) -> str:
         artifacts_remote = bundle_remote_dir(volume, "artifacts")
-        protege_name, cli_name = self._find_ontop_artifact_names(client, artifacts_remote)
+        protege_name, cli_name = self._find_ontop_artifact_names(
+            client, artifacts_remote
+        )
         return protege_name or cli_name or ""
 
     @staticmethod
@@ -316,7 +347,9 @@ class OntopProcessManager:
             "ontop.inferDefaultDatatype=true\n"
         )
         self.properties_path.write_text(content)
-        logger.info("Wrote JDBC M2M OAuth properties for service principal %s", client_id)
+        logger.info(
+            "Wrote JDBC M2M OAuth properties for service principal %s", client_id
+        )
 
     def start(self) -> None:
         if self._ontop_binary is None or self._mapping_path is None:
