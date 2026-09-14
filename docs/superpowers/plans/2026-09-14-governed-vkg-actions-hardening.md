@@ -388,6 +388,6 @@ the documented `VARIANT` columns. Record pre-invocation validation failures as
 non-terminal `REFUSED` events so deterministic retries can recover after a
 transient subject-check failure.
 
-- [ ] **Step 7: Review the final diff and open the one PR**
+- [x] **Step 7: Review the final diff and open the one PR**
 
 Review `git diff --stat origin/main...HEAD` and `git diff origin/main...HEAD` for customer identifiers, secrets, UI code, and unrelated changes. Push `feat/governed-vkg-actions` to the user's fork and open one pull request against `aktungmak/ontop-databricks-apps:main` describing all five hardening fixes and the verification evidence.
