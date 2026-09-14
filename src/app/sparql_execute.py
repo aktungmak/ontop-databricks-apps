@@ -17,6 +17,7 @@ import httpx
 from databricks.sql.exc import Error as DbsqlError, RequestError
 from rdflib.term import Node, URIRef, Variable
 
+from actions.dbsql import statement_timeout_sql
 from config import Settings
 from obo import get_workspace_host
 from obqc import extract_bgp_triples
@@ -146,7 +147,10 @@ def _binding_for_type(ontop_type: str, sval: str) -> dict[str, str]:
 
 
 def run_sql(
-    sql: str, token: str, app_settings: Settings
+    sql: str,
+    token: str,
+    app_settings: Settings,
+    statement_timeout_seconds: int | None = None,
 ) -> tuple[list[str], list[tuple]]:
     from databricks import sql as dbsql
 
@@ -158,9 +162,12 @@ def run_sql(
         "schema": app_settings.default_schema,
     }
 
+    timeout_statement = statement_timeout_sql(statement_timeout_seconds)
     try:
         with dbsql.connect(**connection_options) as conn:
             with conn.cursor() as cursor:
+                if timeout_statement is not None:
+                    cursor.execute(timeout_statement)
                 cursor.execute(sql)
                 columns = (
                     [desc[0] for desc in cursor.description]
@@ -224,6 +231,7 @@ async def execute_sparql_query(
     settings: Settings,
     http_client: httpx.AsyncClient,
     ontop_manager: OntopProcessManager,
+    statement_timeout_seconds: int | None = None,
 ) -> SparqlExecuteResult:
     """Reformulate via Ontop, run DBSQL with ``token``, return SPARQL JSON or error.
 
@@ -277,7 +285,13 @@ async def execute_sparql_query(
     var_types = extract_variable_types(upstream.text)
     sql = extract_native_sql(upstream.text)
     try:
-        columns, rows = await asyncio.to_thread(run_sql, sql, token, settings)
+        columns, rows = await asyncio.to_thread(
+            run_sql,
+            sql,
+            token,
+            settings,
+            statement_timeout_seconds,
+        )
     except (RuntimeError, DbsqlError) as exc:
         logger.exception("Databricks SQL execution failed")
         message = str(exc)

@@ -75,6 +75,67 @@ def test_run_user_sql_uses_forwarded_token(monkeypatch):
     assert rows == [(1,)]
 
 
+def test_run_user_sql_sets_statement_timeout_on_execution_cursor(monkeypatch):
+    calls = []
+
+    class Cursor:
+        description = [("value",)]
+
+        def execute(self, sql, parameters=None):
+            calls.append((sql, parameters))
+
+        def fetchall(self):
+            return [(1,)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr("databricks.sql.connect", lambda **_: Connection())
+
+    columns, rows = run_user_sql(
+        "SELECT 1 AS value",
+        "user-token",
+        _settings(),
+        timeout_seconds=17,
+    )
+
+    assert calls == [
+        ("SET STATEMENT_TIMEOUT = 17", None),
+        ("SELECT 1 AS value", None),
+    ]
+    assert columns == ["value"]
+    assert rows == [(1,)]
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1, True])
+def test_run_user_sql_rejects_invalid_statement_timeout(monkeypatch, timeout_seconds):
+    def unexpected_connect(**_):
+        raise AssertionError("invalid timeout must fail before connecting")
+
+    monkeypatch.setattr("databricks.sql.connect", unexpected_connect)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        run_user_sql(
+            "SELECT 1",
+            "user-token",
+            _settings(),
+            timeout_seconds=timeout_seconds,
+        )
+
+
 def test_quote_fqn_requires_a_simple_three_part_identifier():
     assert (
         quote_fqn(("cat", "sch", "vkg_action_audit"))

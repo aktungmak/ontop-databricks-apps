@@ -7,12 +7,15 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
+import pytest
+from databricks.sql.exc import ServerOperationError
 
 from config import Settings
 from sparql_execute import (
     SparqlExecuteError,
     SparqlExecuteSuccess,
     execute_sparql_query,
+    run_sql,
 )
 from sparql_execute import is_permission_denied, permission_denied_summary
 
@@ -92,6 +95,97 @@ def _error_has_no_native_sql(result: SparqlExecuteError) -> None:
     assert not hasattr(result, "sql")
     assert not hasattr(result, "native_sql")
     assert set(result.__dataclass_fields__) == {"message", "status_code"}
+
+
+def test_run_sql_sets_statement_timeout_on_execution_cursor(monkeypatch) -> None:
+    calls = []
+
+    class Cursor:
+        description = [("value",)]
+
+        def execute(self, sql, parameters=None):
+            calls.append((sql, parameters))
+
+        def fetchall(self):
+            return [(1,)]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+    monkeypatch.setattr("databricks.sql.connect", lambda **_: Connection())
+
+    columns, rows = run_sql(
+        "SELECT 1 AS value",
+        "user-token",
+        _settings(),
+        statement_timeout_seconds=23,
+    )
+
+    assert calls == [
+        ("SET STATEMENT_TIMEOUT = 23", None),
+        ("SELECT 1 AS value", None),
+    ]
+    assert columns == ["value"]
+    assert rows == [(1,)]
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1, True])
+def test_run_sql_rejects_invalid_statement_timeout(
+    monkeypatch, timeout_seconds
+) -> None:
+    def unexpected_connect(**_):
+        raise AssertionError("invalid timeout must fail before connecting")
+
+    monkeypatch.setattr("databricks.sql.connect", unexpected_connect)
+
+    with pytest.raises(ValueError, match="positive integer"):
+        run_sql(
+            "SELECT 1",
+            "user-token",
+            _settings(),
+            statement_timeout_seconds=timeout_seconds,
+        )
+
+
+def test_execute_sparql_query_forwards_statement_timeout() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 200
+    upstream.text = CONSTRUCT_REFORMULATE
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+    observed_timeouts = []
+
+    def recording_run_sql(sql, token, settings, statement_timeout_seconds=None):
+        observed_timeouts.append(statement_timeout_seconds)
+        return ["c", "name"], [("http://ex/1", "Alice")]
+
+    with patch("sparql_execute.run_sql", side_effect=recording_run_sql):
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT ?c ?name WHERE { ?c <ex:name> ?name }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+                statement_timeout_seconds=31,
+            )
+        )
+
+    assert isinstance(result, SparqlExecuteSuccess)
+    assert observed_timeouts == [31]
 
 
 def test_ontop_not_running_returns_503() -> None:
@@ -186,9 +280,6 @@ def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
     assert result.status_code == 502
     assert result.message == "Warehouse is stopped"
     _error_has_no_native_sql(result)
-
-
-from databricks.sql.exc import ServerOperationError
 
 
 def test_permission_denial_returns_403_summary() -> None:
