@@ -69,7 +69,6 @@ def test_compiles_min_count_with_inherited_class_target_and_default_metadata() -
         "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
         "<http://example.org/shacl-test/Person> ."
     ) in query
-    assert "FILTER (isIRI(?focus_node))" in query
     assert (
         "OPTIONAL { ?focus_node <http://example.org/shacl-test/name> ?value }"
         in query
@@ -100,7 +99,6 @@ def test_compiles_max_count_with_target_node_and_required_path() -> None:
     assert "?focus_node <http://example.org/shacl-test/name> ?value" in query
     assert "OPTIONAL" not in query
     assert "HAVING (COUNT(?value) > 1)" in query
-    assert "FILTER (isIRI(?focus_node))" in query
 
 
 def test_compiles_datatype_with_target_subjects_of() -> None:
@@ -143,7 +141,6 @@ def test_compiles_pattern_flags_and_target_objects_of_with_result_metadata() -> 
     query = _normalized(compiled.query)
     assert "?any <http://example.org/shacl-test/hasMember> ?focus_node ." in query
     assert 'FILTER (!REGEX(STR(?value), "^[a-z]+$", "i"))' in query
-    assert "FILTER (isIRI(?focus_node))" in query
 
 
 def test_deactivated_property_shape_compiles_no_queries() -> None:
@@ -160,11 +157,11 @@ def test_deactivated_property_shape_compiles_no_queries() -> None:
     assert queries == []
 
 
-def test_node_shape_constraint_without_property_shape_compiles_no_queries() -> None:
+def test_unsupported_path_without_targets_compiles_no_queries() -> None:
     queries = _compile(
         """
-        ex:PersonShape a sh:NodeShape ;
-          sh:targetClass ex:Person ;
+        ex:NameShape a sh:PropertyShape ;
+          sh:path [ sh:zeroOrMorePath ex:name ] ;
           sh:minCount 1 .
         """
     )
@@ -172,17 +169,125 @@ def test_node_shape_constraint_without_property_shape_compiles_no_queries() -> N
     assert queries == []
 
 
-def test_complex_path_is_skipped_without_inspecting_constraints() -> None:
-    queries = _compile(
+def test_property_only_constraint_on_node_shape_is_ill_formed() -> None:
+    with pytest.raises(IllFormedShapeError, match="property-shape only"):
+        _compile(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:minCount 1 .
+            """
+        )
+
+
+def test_node_shape_leaf_constraint_binds_focus_as_value() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:datatype xsd:string .
+        """
+    )[0]
+
+    assert compiled.path is None
+    assert "BIND (?focus_node AS ?value)" in _normalized(compiled.query)
+
+
+def test_inverse_path_compiles_for_class_constraint() -> None:
+    compiled = _compile(
         """
         ex:ManagerShape a sh:PropertyShape ;
           sh:targetClass ex:Person ;
           sh:path [ sh:inversePath ex:manages ] ;
           sh:class ex:Manager .
         """
+    )[0]
+
+    assert compiled.path == "^<http://example.org/shacl-test/manages>"
+    assert (
+        "?focus_node ^<http://example.org/shacl-test/manages> ?value ."
+        in _normalized(compiled.query)
     )
 
-    assert queries == []
+
+@pytest.mark.parametrize(
+    ("path_ttl", "path_type"),
+    [
+        ("[ sh:zeroOrMorePath ex:knows ]", "ZeroOrMorePath"),
+        ("[ sh:oneOrMorePath ex:knows ]", "OneOrMorePath"),
+        ("[ sh:zeroOrOnePath ex:knows ]", "ZeroOrOnePath"),
+    ],
+)
+def test_unsupported_repetition_paths_raise(
+    path_ttl: str, path_type: str
+) -> None:
+    with pytest.raises(NotImplementedError, match=path_type):
+        _compile(
+            f"""
+            ex:PathShape a sh:PropertyShape ;
+              sh:targetClass ex:Person ;
+              sh:path {path_ttl} ;
+              sh:class ex:Person .
+            """
+        )
+
+
+@pytest.mark.parametrize(
+    ("path_ttl", "expected"),
+    [
+        (
+            "[ sh:inversePath ex:a ]",
+            "^<http://example.org/shacl-test/a>",
+        ),
+        (
+            "( ex:a ex:b )",
+            "<http://example.org/shacl-test/a> / "
+            "<http://example.org/shacl-test/b>",
+        ),
+        (
+            "[ sh:alternativePath ( ex:a ex:b ) ]",
+            "<http://example.org/shacl-test/a> | "
+            "<http://example.org/shacl-test/b>",
+        ),
+    ],
+)
+def test_compiles_supported_property_path_snapshots(
+    path_ttl: str, expected: str
+) -> None:
+    compiled = _compile(
+        f"""
+        ex:PathShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path {path_ttl} ;
+          sh:nodeKind sh:IRI .
+        """
+    )[0]
+
+    assert compiled.path == expected
+    assert f"?focus_node {expected} ?value ." in _normalized(compiled.query)
+
+
+def test_executes_sequence_path() -> None:
+    compiled = _compile(
+        """
+        ex:CityShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ( ex:address ex:city ) ;
+          sh:nodeKind sh:IRI .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:address ex:AliceAddress .
+        ex:AliceAddress ex:city ex:London .
+        ex:Bob a ex:Person ; ex:address ex:BobAddress .
+        ex:BobAddress ex:city "Paris" .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.BobAddress, EX.city)))
+    }
 
 
 def test_unsupported_constraint_aborts_compilation() -> None:
@@ -222,7 +327,7 @@ def test_multiple_supported_constraints_compile_one_query_each() -> None:
     assert all(query.path == str(EX.value) for query in queries)
 
 
-def test_executes_min_count_with_inherited_target_class_and_filters_blank_nodes() -> None:
+def test_executes_min_count_with_inherited_target_class_including_blank_nodes() -> None:
     compiled = _compile(
         """
         ex:PersonShape a sh:NodeShape ;
@@ -243,8 +348,93 @@ def test_executes_min_count_with_inherited_target_class_and_filters_blank_nodes(
 
     rows = list(graph.query(compiled.query))
 
-    assert [tuple(row) for row in rows] == [(EX.Bob,)]
-    assert all(not isinstance(row[0], BNode) for row in rows)
+    focus_nodes = {row[0] for row in rows}
+    assert EX.Bob in focus_nodes
+    assert len(focus_nodes) == 2
+    assert any(isinstance(node, BNode) for node in focus_nodes)
+
+
+def test_executes_node_shape_leaf_constraint_for_blank_focus_node() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:nodeKind sh:IRI .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person .
+        [] a ex:Person .
+        """
+    )
+
+    rows = list(graph.query(compiled.query))
+
+    assert len(rows) == 1
+    assert isinstance(rows[0][0], BNode)
+    assert rows[0][0] == rows[0][1]
+
+
+def test_executes_nested_property_shape_with_value_nodes_as_focus() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:property [
+            sh:path ex:address ;
+            sh:property [
+              sh:path ex:city ;
+              sh:minCount 1
+            ]
+          ] .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:address ex:AliceAddress .
+        ex:AliceAddress ex:city ex:London .
+        ex:Bob a ex:Person ; ex:address ex:BobAddress .
+        """
+    )
+
+    assert compiled.constraint_iri == SH.MinCountConstraintComponent
+    assert compiled.path == str(EX.city)
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.BobAddress,)
+    }
+
+
+def test_executes_doubly_nested_property_shape_focus() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:property [
+            sh:path ex:address ;
+            sh:property [
+              sh:path ex:city ;
+              sh:property [
+                sh:path ex:label ;
+                sh:minCount 1
+              ]
+            ]
+          ] .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:address ex:AliceAddress .
+        ex:AliceAddress ex:city ex:London .
+        ex:London ex:label "London" .
+        ex:Bob a ex:Person ; ex:address ex:BobAddress .
+        ex:BobAddress ex:city ex:Paris .
+        """
+    )
+
+    assert compiled.constraint_iri == SH.MinCountConstraintComponent
+    assert compiled.path == str(EX.label)
+    assert {tuple(row) for row in graph.query(compiled.query)} == {(EX.Paris,)}
 
 
 def test_executes_max_count_for_target_node_values() -> None:

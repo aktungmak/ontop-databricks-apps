@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from dataclasses import dataclass
 from typing import Callable, TypeVar
 
@@ -13,6 +12,8 @@ from .constraint_components import (
     ClassConstraintComponent,
     ConstraintComponent,
     DatatypeConstraintComponent,
+    LessThanConstraintComponent,
+    LessThanOrEqualsConstraintComponent,
     MaxCountConstraintComponent,
     MaxExclusiveConstraintComponent,
     MaxInclusiveConstraintComponent,
@@ -21,10 +22,20 @@ from .constraint_components import (
     MinInclusiveConstraintComponent,
     NodeKindConstraintComponent,
     PatternConstraintComponent,
+    QualifiedMaxCountConstraintComponent,
+    QualifiedMinCountConstraintComponent,
+    UniqueLangConstraintComponent,
 )
 from .shapes import (
+    AlternativePath,
+    InversePath,
+    NodeShape,
+    OneOrMorePath,
+    PredicatePath,
     PropertyShape,
+    PropertyPath,
     Severity,
+    SequencePath,
     Shape,
     ShapesGraph,
     Target,
@@ -32,7 +43,8 @@ from .shapes import (
     TargetNode,
     TargetObjectsOf,
     TargetSubjectsOf,
-    PredicatePath,
+    ZeroOrMorePath,
+    ZeroOrOnePath,
 )
 from .types import IllFormedShapeError, ShapeRef
 
@@ -41,14 +53,47 @@ __all__ = [
     "SparqlValidator",
     "SparqlViolationQuery",
     "ViolationContext",
+    "property_path_sparql",
     "sparql_validator",
     "validator_for",
 ]
 
-logger = logging.getLogger(__name__)
-
 C = TypeVar("C", bound=ConstraintComponent)
 _SPARQL_VALIDATORS: dict[type[ConstraintComponent], ConstraintValidator] = {}
+
+
+def property_path_sparql(path: PropertyPath) -> str:
+    """Render a supported SHACL property path as SPARQL 1.1 path syntax."""
+    if isinstance(path, PredicatePath):
+        return path.predicate.n3()
+    if isinstance(path, InversePath):
+        inner = property_path_sparql(path.path)
+        if isinstance(path.path, PredicatePath):
+            return f"^{inner}"
+        return f"^({inner})"
+    if isinstance(path, SequencePath):
+        parts = [
+            f"({property_path_sparql(part)})"
+            if isinstance(part, AlternativePath)
+            else property_path_sparql(part)
+            for part in path.paths
+        ]
+        return " / ".join(parts)
+    if isinstance(path, AlternativePath):
+        return " | ".join(property_path_sparql(part) for part in path.paths)
+    if isinstance(path, ZeroOrMorePath):
+        raise NotImplementedError(
+            "ZeroOrMorePath (sh:zeroOrMorePath / *) is not supported"
+        )
+    if isinstance(path, OneOrMorePath):
+        raise NotImplementedError(
+            "OneOrMorePath (sh:oneOrMorePath / +) is not supported"
+        )
+    if isinstance(path, ZeroOrOnePath):
+        raise NotImplementedError(
+            "ZeroOrOnePath (sh:zeroOrOnePath / ?) is not supported"
+        )
+    raise TypeError(f"Unknown PropertyPath {path!r}")
 
 
 def sparql_validator(
@@ -75,7 +120,7 @@ class SparqlViolationQuery:
     query: str
     shape_ref: ShapeRef
     constraint_iri: URIRef
-    path: str
+    path: str | None
     message: str | None
     severity: URIRef
 
@@ -84,7 +129,8 @@ class SparqlViolationQuery:
 class ViolationContext:
     shapes_graph: ShapesGraph
     focus_nodes_sparql: str
-    path: URIRef
+    value_nodes_sparql: str
+    path_sparql: str | None
     shape_ref: ShapeRef
     message: str | None
     severity: URIRef
@@ -104,11 +150,20 @@ class ConstraintValidator:
         constraint: ConstraintComponent,
         query: str,
     ) -> SparqlViolationQuery:
+        result_path = ctx.path_sparql
+        if (
+            result_path is not None
+            and result_path.startswith("<")
+            and result_path.endswith(">")
+            and result_path.count("<") == 1
+            and result_path.count(">") == 1
+        ):
+            result_path = result_path[1:-1]
         return SparqlViolationQuery(
             query=query,
             shape_ref=ctx.shape_ref,
             constraint_iri=type(constraint).component_iri,
-            path=str(ctx.path),
+            path=result_path,
             message=ctx.message,
             severity=ctx.severity,
         )
@@ -120,11 +175,11 @@ class MinCountValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, MinCountConstraintComponent)
-        path = ctx.path.n3()
+        assert ctx.path_sparql is not None
         query = f"""SELECT ?focus_node
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  OPTIONAL {{ ?focus_node {path} ?value }}
+  OPTIONAL {{ ?focus_node {ctx.path_sparql} ?value }}
 }}
 GROUP BY ?focus_node
 HAVING (COUNT(?value) < {constraint.minCount})"""
@@ -137,11 +192,11 @@ class MaxCountValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, MaxCountConstraintComponent)
-        path = ctx.path.n3()
+        assert ctx.path_sparql is not None
         query = f"""SELECT ?focus_node
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value
+  ?focus_node {ctx.path_sparql} ?value
 }}
 GROUP BY ?focus_node
 HAVING (COUNT(?value) > {constraint.maxCount})"""
@@ -154,12 +209,11 @@ class ClassValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, ClassConstraintComponent)
-        path = ctx.path.n3()
         class_iri = constraint.class_.n3()
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value .
+  {ctx.value_nodes_sparql}
   FILTER (isLiteral(?value) || NOT EXISTS {{
     ?value <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* {class_iri} .
   }})
@@ -183,14 +237,13 @@ class NodeKindValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, NodeKindConstraintComponent)
-        path = ctx.path.n3()
         filt = _NODEKIND_VIOLATION_FILTERS.get(constraint.nodeKind)
         if filt is None:
             raise IllFormedShapeError(f"Unknown sh:nodeKind {constraint.nodeKind}")
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value .
+  {ctx.value_nodes_sparql}
   {filt}
 }}"""
         return self._query(ctx, constraint, query)
@@ -202,12 +255,11 @@ class DatatypeValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, DatatypeConstraintComponent)
-        path = ctx.path.n3()
         datatype = constraint.datatype.n3()
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value .
+  {ctx.value_nodes_sparql}
   FILTER (!isLiteral(?value) || datatype(?value) != {datatype})
 }}"""
         return self._query(ctx, constraint, query)
@@ -219,20 +271,18 @@ class PatternValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, PatternConstraintComponent)
-        path = ctx.path.n3()
         pattern = Literal(constraint.pattern).n3()
         flags = f", {Literal(constraint.flags).n3()}" if constraint.flags else ""
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value .
+  {ctx.value_nodes_sparql}
   FILTER (!REGEX(STR(?value), {pattern}{flags}))
 }}"""
         return self._query(ctx, constraint, query)
 
 
 def _range_violation_query(ctx: ViolationContext, bound: Node, operator: str) -> str:
-    path = ctx.path.n3()
     bound_n3 = bound.n3()
     # COALESCE turns SPARQL comparison errors into violations
     # type guards cover rdflib treating some incomparable pairs as true (SHACL §4.3).
@@ -243,7 +293,7 @@ def _range_violation_query(ctx: ViolationContext, bound: Node, operator: str) ->
     return f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
-  ?focus_node {path} ?value .
+  {ctx.value_nodes_sparql}
   FILTER (!COALESCE({comparable} && ({bound_n3} {operator} ?value), false))
 }}"""
 
@@ -293,7 +343,7 @@ class MaxInclusiveValidator(ConstraintValidator):
 
 
 class SparqlValidator:
-    """Compile supported property-shape constraints to violation SELECTs."""
+    """Compile supported SHACL constraints to violation SELECTs."""
 
     def __init__(self, shapes_graph: ShapesGraph):
         self.shapes_graph = shapes_graph
@@ -308,24 +358,41 @@ class SparqlValidator:
     def validation_results(
         self, shape_ref: ShapeRef, shape: Shape
     ) -> list[SparqlViolationQuery]:
-        if shape.deactivated or not isinstance(shape, PropertyShape):
-            return []
-        if not isinstance(shape.path, PredicatePath):
-            logger.info(
-                "Only IRI sh:path values are supported for %s; skipping", shape_ref
-            )
+        if shape.deactivated:
             return []
 
         focus_nodes_sparql = self._focus_nodes_sparql(shape_ref)
         if focus_nodes_sparql is None:
             return []
 
+        return self._validation_results_for_focus(
+            shape_ref, shape, focus_nodes_sparql
+        )
+
+    def _validation_results_for_focus(
+        self,
+        shape_ref: ShapeRef,
+        shape: Shape,
+        focus_nodes_sparql: str,
+        nested_ancestors: set[ShapeRef] | None = None,
+    ) -> list[SparqlViolationQuery]:
+        if nested_ancestors is None:
+            nested_ancestors = {shape_ref}
+        path_sparql: str | None = None
+        if isinstance(shape, PropertyShape):
+            path_sparql = property_path_sparql(shape.path)
+            value_nodes_sparql = f"?focus_node {path_sparql} ?value ."
+        else:
+            self._check_node_shape_parameters(shape_ref, shape)
+            value_nodes_sparql = "BIND (?focus_node AS ?value)"
+
         severity = shape.severity or Severity.VIOLATION
         severity_iri = severity.value if isinstance(severity, Severity) else severity
         ctx = ViolationContext(
             shapes_graph=self.shapes_graph,
             focus_nodes_sparql=focus_nodes_sparql,
-            path=shape.path.predicate,
+            value_nodes_sparql=value_nodes_sparql,
+            path_sparql=path_sparql,
             shape_ref=shape_ref,
             message=shape.message[0] if shape.message else None,
             severity=severity_iri,
@@ -338,10 +405,71 @@ class SparqlValidator:
                 # Fail loudly until every Core component in the shapes graph has SPARQL.
                 raise NotImplementedError(f"No SPARQL validator for {constraint!r}")
             queries.append(validator.violations(ctx, constraint))
+
+        if isinstance(shape, PropertyShape):
+            queries.extend(
+                self._nested_property_results(
+                    shape, focus_nodes_sparql, nested_ancestors
+                )
+            )
         return queries
 
+    def _nested_property_results(
+        self,
+        parent: PropertyShape,
+        parent_focus_sparql: str,
+        ancestors: set[ShapeRef],
+    ) -> list[SparqlViolationQuery]:
+        parent_path = property_path_sparql(parent.path)
+        parent_var = f"?parent_focus_{len(ancestors)}"
+        nested_focus_sparql = (
+            "SELECT DISTINCT ?focus_node WHERE {\n"
+            f"    {{ {parent_focus_sparql.replace('?focus_node', parent_var)} }}\n"
+            f"    {parent_var} {parent_path} ?focus_node .\n"
+            "  }"
+        )
+        queries: list[SparqlViolationQuery] = []
+        for child_ref in parent.property:
+            if child_ref in ancestors:
+                continue
+            child = self.shapes_graph.shapes.get(child_ref)
+            if not isinstance(child, PropertyShape) or child.deactivated:
+                continue
+            if any(
+                not node_parent.deactivated and node_parent.targets
+                for node_parent in self.shapes_graph.parent_node_shapes(child_ref)
+            ):
+                continue
+            queries.extend(
+                self._validation_results_for_focus(
+                    child_ref,
+                    child,
+                    nested_focus_sparql,
+                    ancestors | {child_ref},
+                )
+            )
+        return queries
+
+    @staticmethod
+    def _check_node_shape_parameters(shape_ref: ShapeRef, shape: Shape) -> None:
+        property_only = (
+            MinCountConstraintComponent,
+            MaxCountConstraintComponent,
+            UniqueLangConstraintComponent,
+            LessThanConstraintComponent,
+            LessThanOrEqualsConstraintComponent,
+            QualifiedMinCountConstraintComponent,
+            QualifiedMaxCountConstraintComponent,
+        )
+        for constraint in shape.constraints:
+            if isinstance(constraint, property_only):
+                raise IllFormedShapeError(
+                    f"Node shape {shape_ref} is ill-formed: "
+                    f"{type(constraint).component_iri.n3()} is property-shape only"
+                )
+
     def _focus_nodes_sparql(self, shape_ref: ShapeRef) -> str | None:
-        """Compile effective targets to an IRI-only focus-node subquery."""
+        """Compile effective targets to a focus-node subquery."""
         target_patterns = [
             pattern
             for target in self.shapes_graph.effective_targets(shape_ref)
@@ -353,7 +481,6 @@ class SparqlValidator:
         return (
             "SELECT DISTINCT ?focus_node WHERE {\n"
             f"    {unions}\n"
-            "    FILTER (isIRI(?focus_node))\n"
             "  }"
         )
 

@@ -15,12 +15,13 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 | Shape metadata (`sh:deactivated`, `sh:message`, `sh:severity`, `sh:name`, `sh:description`, `sh:order`) | Done |
 | Targets: `sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf` | Done |
 | Property shapes inherit targets from parent node shapes | Done |
+| Nested `sh:property` under property shapes | Done (focus rebound to parent value nodes) |
 | SPARQL-based targets (`sh:target`) | Not started |
 | SPARQL-based constraints (`sh:sparql`) | Not started |
 | IRI `sh:path` on property shapes | Done (parsed and compiled) |
-| Complex SHACL paths (sequence, inverse, alternative, zero-or-more, …) | Parsed into path AST; SPARQL not compiled |
+| Complex SHACL paths | Inverse, sequence, and alternative compiled; `*`, `+`, and `?` rejected at compile time |
 | RDF lists (`sh:in`, `sh:and`, `sh:or`, `sh:xone`, `sh:ignoredProperties`, `sh:languageIn`) | Expanded |
-| Node-shape constraints compiled to SPARQL | Not started (validator skips node shapes) |
+| Node-shape constraints compiled to SPARQL | Done for implemented leaf validators; property-only parameters are ill-formed |
 | Property-shape constraints compiled to SPARQL | Partial (see below) |
 | Execute SPARQL against a VKG / SPARQL endpoint | Not started |
 | Assemble a `sh:ValidationReport` | Not started |
@@ -43,25 +44,25 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property shapes; `rdf:type/rdfs:subClassOf*`) |
-| `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property shapes) |
-| `NodeKindValidator` | `sh:NodeKindConstraintComponent` | `sh:nodeKind` | Done | Done (property shapes) |
+| `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property and node shapes; `rdf:type/rdfs:subClassOf*`) |
+| `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property and node shapes) |
+| `NodeKindValidator` | `sh:NodeKindConstraintComponent` | `sh:nodeKind` | Done | Done (property and node shapes) |
 
 ### 4.2 Cardinality (property shapes only)
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `MinCountValidator` | `sh:MinCountConstraintComponent` | `sh:minCount` | Done | Done |
-| `MaxCountValidator` | `sh:MaxCountConstraintComponent` | `sh:maxCount` | Done | Done |
+| `MinCountValidator` | `sh:MinCountConstraintComponent` | `sh:minCount` | Done | Done (property shapes only) |
+| `MaxCountValidator` | `sh:MaxCountConstraintComponent` | `sh:maxCount` | Done | Done (property shapes only) |
 
 ### 4.3 Value range
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `MinExclusiveValidator` | `sh:MinExclusiveConstraintComponent` | `sh:minExclusive` | Done | Done (property shapes) |
-| `MinInclusiveValidator` | `sh:MinInclusiveConstraintComponent` | `sh:minInclusive` | Done | Done (property shapes) |
-| `MaxExclusiveValidator` | `sh:MaxExclusiveConstraintComponent` | `sh:maxExclusive` | Done | Done (property shapes) |
-| `MaxInclusiveValidator` | `sh:MaxInclusiveConstraintComponent` | `sh:maxInclusive` | Done | Done (property shapes) |
+| `MinExclusiveValidator` | `sh:MinExclusiveConstraintComponent` | `sh:minExclusive` | Done | Done (property and node shapes) |
+| `MinInclusiveValidator` | `sh:MinInclusiveConstraintComponent` | `sh:minInclusive` | Done | Done (property and node shapes) |
+| `MaxExclusiveValidator` | `sh:MaxExclusiveConstraintComponent` | `sh:maxExclusive` | Done | Done (property and node shapes) |
+| `MaxInclusiveValidator` | `sh:MaxInclusiveConstraintComponent` | `sh:maxInclusive` | Done | Done (property and node shapes) |
 
 ### 4.4 String-based
 
@@ -69,7 +70,7 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 | --- | --- | --- | --- | --- |
 | `MinLengthValidator` | `sh:MinLengthConstraintComponent` | `sh:minLength` | Done | Not started |
 | `MaxLengthValidator` | `sh:MaxLengthConstraintComponent` | `sh:maxLength` | Done | Not started |
-| `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`, optional `sh:flags` | Done | Done (property shapes) |
+| `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`, optional `sh:flags` | Done | Done (property and node shapes) |
 | `LanguageInValidator` | `sh:LanguageInConstraintComponent` | `sh:languageIn` | Done | Not started |
 | `UniqueLangValidator` | `sh:UniqueLangConstraintComponent` | `sh:uniqueLang` (property shapes only) | Done | Not started |
 
@@ -102,7 +103,7 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
 | `NodeValidator` | `sh:NodeConstraintComponent` | `sh:node` (repeatable) | Done | Not started |
-| `PropertyValidator` | `sh:PropertyConstraintComponent` | `sh:property` (nested property shapes) | Done (`Shape.property`) | Not started |
+| `PropertyValidator` | `sh:PropertyConstraintComponent` | `sh:property` (nested property shapes) | Done (`Shape.property`) | Done (rebinds focus to value nodes) |
 | `QualifiedMinCountValidator` | `sh:QualifiedMinCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMinCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
 | `QualifiedMaxCountValidator` | `sh:QualifiedMaxCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
 
@@ -114,6 +115,6 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Not started |
 | `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Not started |
 
-**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`) on IRI `sh:path` property shapes only. Node-shape compilation and the remaining 19 are not started.
+**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality remains property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time, while `ClassValidator` retains its hardcoded `rdf:type/rdfs:subClassOf*` check.
 
-`ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, `sh:property`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.
+`ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.
