@@ -46,7 +46,7 @@ class Severity(Enum):
 
 @dataclass
 class Target:
-    """Base class for sh:Target values used via sh:target."""
+    """Base class for SHACL Core targets (sh:targetClass, sh:targetNode, …)."""
 
 
 @dataclass
@@ -190,6 +190,7 @@ class Shape:
     message: list[str] = field(default_factory=list)
     severity: Severity | URIRef | None = None
     targets: list[Target] = field(default_factory=list)
+    sparql_targets: list[ShapeRef] = field(default_factory=list)
     constraints: list[ConstraintComponent] = field(default_factory=list)
     property: list[ShapeRef] = field(default_factory=list)
     sparql: list[ShapeRef] = field(default_factory=list)
@@ -240,6 +241,7 @@ def _shape_common_kwargs(graph: Graph, shape_node: ShapeRef) -> dict:
         "message": literal_strings(graph, shape_node, SH.message),
         "severity": _parse_severity(graph, shape_node),
         "targets": _parse_targets(graph, shape_node),
+        "sparql_targets": list(graph.objects(shape_node, SH.target)),
         "constraints": parse_constraints(graph, shape_node),
         "property": list(graph.objects(shape_node, SH.property)),
         "sparql": list(graph.objects(shape_node, SH.sparql)),
@@ -311,6 +313,7 @@ class ShapesGraph:
             SH.targetNode,
             SH.targetSubjectsOf,
             SH.targetObjectsOf,
+            SH.target,
         ):
             for node in graph.subjects(shape_predicate, None):
                 if node in shapes:

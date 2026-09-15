@@ -15,7 +15,8 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 | Shape metadata (`sh:deactivated`, `sh:message`, `sh:severity`, `sh:name`, `sh:description`, `sh:order`) | Done |
 | Targets: `sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf` | Done |
 | Property shapes inherit targets from parent node shapes | Done |
-| Nested `sh:property` under property shapes | Done (focus rebound to parent value nodes) |
+| One level of `sh:property` selected through a node shape | Done via `compile_shape` |
+| Nested `sh:property` under property shapes | Done via `_nested_property_results` |
 | SPARQL-based targets (`sh:target`) | Not started |
 | SPARQL-based constraints (`sh:sparql`) | Not started |
 | IRI `sh:path` on property shapes | Done (parsed and compiled) |
@@ -23,11 +24,11 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 | RDF lists (`sh:in`, `sh:and`, `sh:or`, `sh:xone`, `sh:ignoredProperties`, `sh:languageIn`) | Expanded |
 | Node-shape constraints compiled to SPARQL | Done for implemented leaf validators; property-only parameters are ill-formed |
 | Property-shape constraints compiled to SPARQL | Partial (see below) |
-| Execute SPARQL against a VKG / SPARQL endpoint | Not started |
+| Execute SPARQL against the VKG via MCP `validate_shacl` | Done |
 | Assemble a `sh:ValidationReport` | Not started |
 | R2RML mapping as evaluation context | Not started |
 | Check that classes and predicates appear in the mapping | Not started |
-| App / MCP integration | Not started |
+| App / MCP integration | Done for `validate_shacl(shapes_turtle, shape_iri)` |
 | Parse tests (`python3 -m pytest shacl/tests -q` from `src/app`) | Done |
 
 ## SPARQL validators (SHACL Core)
@@ -36,7 +37,7 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 
 SHACL-SPARQL (`sh:SPARQLConstraintComponent` / `sh:sparql`, SPARQL-based targets, custom constraint components) is out of Core and is tracked only in Status above.
 
-`sh:property` is a Core constraint component (`sh:PropertyConstraintComponent`) but is stored on `Shape.property`, not as a `ConstraintComponent` dataclass. Its validator walks nested property shapes and compiles *their* constraints, rebinding focus nodes to the parent’s value nodes. Nested results keep the inner `sh:sourceConstraintComponent` (unlike `sh:node`, which collapses to a single result).
+`sh:property` is a Core constraint component (`sh:PropertyConstraintComponent`) but is stored on `Shape.property`, not as a `ConstraintComponent` dataclass. The product API, `SparqlValidator.compile_shape`, compiles the selected shape and one level of direct property children with the selected shape's effective targets. Nested `sh:property` under those children is compiled through `_nested_property_results`, rebinding focus to the parent's value nodes. Deactivated shapes and shapes with ``has_targets=false`` (no effective SHACL targets; this is a boolean, not a count) produce no queries. Malformed shape syntax raises `IllFormedShapeError`.
 
 Unless noted, a component applies to both node shapes and property shapes. Parameters marked *property shapes only* make a node shape ill-formed.
 
@@ -103,7 +104,7 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
 | `NodeValidator` | `sh:NodeConstraintComponent` | `sh:node` (repeatable) | Done | Not started |
-| `PropertyValidator` | `sh:PropertyConstraintComponent` | `sh:property` (nested property shapes) | Done (`Shape.property`) | Done (rebinds focus to value nodes) |
+| `PropertyValidator` | `sh:PropertyConstraintComponent` | `sh:property` (direct property shapes) | Done (`Shape.property`) | Done (`compile_shape` plus `_nested_property_results`) |
 | `QualifiedMinCountValidator` | `sh:QualifiedMinCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMinCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
 | `QualifiedMaxCountValidator` | `sh:QualifiedMaxCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
 

@@ -10,3 +10,7 @@ NodeKindRef = URIRef
 
 class IllFormedShapeError(ValueError):
     """A shape in the shapes graph violates SHACL syntax."""
+
+
+class UnsupportedShapeError(ValueError):
+    """A well-formed SHACL construct is not supported by this compiler."""

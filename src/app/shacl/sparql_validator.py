@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 from rdflib import Literal, Node, URIRef
 from rdflib.namespace import SH
@@ -46,13 +46,16 @@ from .shapes import (
     ZeroOrMorePath,
     ZeroOrOnePath,
 )
-from .types import IllFormedShapeError, ShapeRef
+from .types import IllFormedShapeError, ShapeRef, UnsupportedShapeError
 
 __all__ = [
     "ConstraintValidator",
+    "ShapeCompileResult",
     "SparqlValidator",
     "SparqlViolationQuery",
+    "UNSUPPORTED_SHACL_INVENTORY",
     "ViolationContext",
+    "build_violation_results",
     "property_path_sparql",
     "sparql_validator",
     "validator_for",
@@ -60,6 +63,14 @@ __all__ = [
 
 C = TypeVar("C", bound=ConstraintComponent)
 _SPARQL_VALIDATORS: dict[type[ConstraintComponent], ConstraintValidator] = {}
+
+UNSUPPORTED_SHACL_INVENTORY = (
+    "temporary SHACL Core gaps (components without a registered validator)",
+    "SPARQL-based targets (sh:target)",
+    "SPARQL-based constraints (sh:sparql)",
+    "repetition paths (sh:zeroOrMorePath/*, sh:oneOrMorePath/+, sh:zeroOrOnePath/?)",
+    "sh:closed",
+)
 
 
 def property_path_sparql(path: PropertyPath) -> str:
@@ -82,15 +93,15 @@ def property_path_sparql(path: PropertyPath) -> str:
     if isinstance(path, AlternativePath):
         return " | ".join(property_path_sparql(part) for part in path.paths)
     if isinstance(path, ZeroOrMorePath):
-        raise NotImplementedError(
+        raise UnsupportedShapeError(
             "ZeroOrMorePath (sh:zeroOrMorePath / *) is not supported"
         )
     if isinstance(path, OneOrMorePath):
-        raise NotImplementedError(
+        raise UnsupportedShapeError(
             "OneOrMorePath (sh:oneOrMorePath / +) is not supported"
         )
     if isinstance(path, ZeroOrOnePath):
-        raise NotImplementedError(
+        raise UnsupportedShapeError(
             "ZeroOrOnePath (sh:zeroOrOnePath / ?) is not supported"
         )
     raise TypeError(f"Unknown PropertyPath {path!r}")
@@ -123,6 +134,58 @@ class SparqlViolationQuery:
     path: str | None
     message: str | None
     severity: URIRef
+
+
+@dataclass(frozen=True)
+class ShapeCompileResult:
+    """Queries and why an accepted shape may require no execution.
+
+    ``has_targets`` is a boolean, not a count: False means the shape declares
+    no effective SHACL targets (so the VKG is not queried).
+    """
+
+    queries: list[SparqlViolationQuery]
+    has_targets: bool = True
+    deactivated: bool = False
+
+
+def _binding_value(binding: dict[str, Any], variable: str) -> str | None:
+    term = binding.get(variable)
+    if not isinstance(term, dict):
+        return None
+    value = term.get("value")
+    return value if isinstance(value, str) else None
+
+
+def _shape_ref_string(shape_ref: ShapeRef) -> str:
+    return str(shape_ref) if isinstance(shape_ref, URIRef) else shape_ref.n3()
+
+
+def build_violation_results(
+    query: SparqlViolationQuery,
+    bindings: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    """Combine SPARQL JSON bindings with compiler-owned result metadata."""
+    violations: list[dict[str, str]] = []
+    for binding in bindings:
+        focus_node = _binding_value(binding, "focus_node")
+        if focus_node is None:
+            raise ValueError("Violation binding is missing focus_node")
+        violation = {
+            "focus_node": focus_node,
+            "source_shape": _shape_ref_string(query.shape_ref),
+            "source_constraint_component": str(query.constraint_iri),
+            "result_severity": str(query.severity),
+        }
+        value = _binding_value(binding, "value")
+        if value is not None:
+            violation["value"] = value
+        if query.path is not None:
+            violation["result_path"] = query.path
+        if query.message is not None:
+            violation["result_message"] = query.message
+        violations.append(violation)
+    return violations
 
 
 @dataclass(frozen=True)
@@ -355,6 +418,58 @@ class SparqlValidator:
             queries.extend(self.validation_results(shape_ref, shape))
         return queries
 
+    def compile_shape(self, shape_iri: ShapeRef) -> ShapeCompileResult:
+        """Compile one selectable shape and one level of its property children."""
+        if not isinstance(shape_iri, URIRef):
+            raise IllFormedShapeError(
+                "Selected shape must be identified by an IRI; blank nodes cannot be selected"
+            )
+        shape = self.shapes_graph.shapes.get(shape_iri)
+        if shape is None:
+            raise IllFormedShapeError(f"Shape IRI {shape_iri} was not found")
+        if shape.deactivated:
+            return ShapeCompileResult(queries=[], deactivated=True)
+
+        self._check_unsupported_shape(shape_iri, shape)
+        property_children: list[tuple[ShapeRef, PropertyShape]] = []
+        if isinstance(shape, NodeShape):
+            for child_ref in shape.property:
+                child = self.shapes_graph.shapes.get(child_ref)
+                if not isinstance(child, PropertyShape):
+                    raise IllFormedShapeError(
+                        f"sh:property value {child_ref} is not a property shape"
+                    )
+                if child.deactivated:
+                    continue
+                property_children.append((child_ref, child))
+
+        focus_nodes_sparql = self._focus_nodes_sparql(shape_iri)
+        if focus_nodes_sparql is None:
+            return ShapeCompileResult(queries=[], has_targets=False)
+
+        queries = self._validation_results_for_focus(
+            shape_iri, shape, focus_nodes_sparql
+        )
+        for child_ref, child in property_children:
+            self._check_unsupported_shape(child_ref, child)
+            queries.extend(
+                self._validation_results_for_focus(
+                    child_ref, child, focus_nodes_sparql
+                )
+            )
+        return ShapeCompileResult(queries=queries)
+
+    @staticmethod
+    def _check_unsupported_shape(shape_ref: ShapeRef, shape: Shape) -> None:
+        if shape.sparql_targets:
+            raise UnsupportedShapeError(
+                f"SPARQL-based target sh:target on shape {shape_ref} is not supported"
+            )
+        if shape.sparql:
+            raise UnsupportedShapeError(
+                f"SPARQL-based constraint sh:sparql on shape {shape_ref} is not supported"
+            )
+
     def validation_results(
         self, shape_ref: ShapeRef, shape: Shape
     ) -> list[SparqlViolationQuery]:
@@ -402,8 +517,10 @@ class SparqlValidator:
         for constraint in shape.constraints:
             validator = validator_for(constraint)
             if validator is None:
-                # Fail loudly until every Core component in the shapes graph has SPARQL.
-                raise NotImplementedError(f"No SPARQL validator for {constraint!r}")
+                raise UnsupportedShapeError(
+                    "Unsupported SHACL Core constraint "
+                    f"{type(constraint).component_iri.n3()}"
+                )
             queries.append(validator.violations(ctx, constraint))
 
         if isinstance(shape, PropertyShape):

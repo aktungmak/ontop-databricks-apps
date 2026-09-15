@@ -14,6 +14,8 @@ from config import Settings
 from obo import MISSING_USER_TOKEN, token_from_headers
 from ontology_store import OntologyStore
 from ontop_manager import OntopProcessManager
+from shacl import UNSUPPORTED_SHACL_INVENTORY
+from shacl_validate import ShaclValidationError, run_shacl_validation
 from sparql_execute import SparqlExecuteError, execute_sparql_query
 
 mcp = FastMCP(
@@ -24,7 +26,8 @@ mcp = FastMCP(
         "If search_ontology returns `# No matches`, do not invent a query against guessed terms. "
         "Instead, search again with different words, or stop and say the term is not in the ontology. "
         "Fully-unbound triple patterns like `?s ?p ?o` are rejected, at least one compnent must be bound. "
-        "Use check_sparql before execute_sparql to ensure the query is valid."
+        "Use check_sparql before execute_sparql to ensure the query is valid. "
+        "Use validate_shacl to validate one named SHACL shape against the implicit VKG data graph."
     ),
 )
 
@@ -183,3 +186,38 @@ async def execute_sparql(query: str) -> dict[str, Any]:
         raise ToolError(f"({result.status_code}): {result.message}")
 
     return result.data
+
+
+_VALIDATE_SHACL_DESCRIPTION = (
+    "Validate one shape IRI from a Turtle shapes graph against the implicit VKG data "
+    "graph. Instance data cannot be supplied. Prefer a single level of sh:property "
+    "on node shapes; avoid nesting sh:property under property shapes. "
+    "The has_targets flag is a boolean: false means the shape declares no SHACL "
+    "targets, so the VKG was not queried (conforms is still true). "
+    "Unsupported constructs: " + "; ".join(UNSUPPORTED_SHACL_INVENTORY) + "."
+)
+
+
+@mcp.tool(description=_VALIDATE_SHACL_DESCRIPTION)
+async def validate_shacl(shapes_turtle: str, shape_iri: str) -> dict[str, Any]:
+    """Validate one selected SHACL shape against the implicit VKG data graph."""
+    runtime = _require_runtime()
+    try:
+        token = get_mcp_user_token()
+    except McpAuthError as exc:
+        raise ToolError(f"({exc.status_code}): {exc.message}") from exc
+
+    if not runtime.ontop_manager.is_running:
+        raise ToolError("(503): Ontop is not running")
+
+    try:
+        return await run_shacl_validation(
+            shapes_turtle,
+            shape_iri,
+            token,
+            runtime.settings,
+            runtime.http_client,
+            runtime.ontop_manager,
+        )
+    except ShaclValidationError as exc:
+        raise ToolError(f"({exc.status_code}): {exc.message}") from exc

@@ -9,8 +9,12 @@ from rdflib import BNode, Graph, Namespace
 from rdflib.namespace import SH
 
 from shacl.shapes import ShapesGraph
-from shacl.sparql_validator import SparqlValidator, SparqlViolationQuery
-from shacl.types import IllFormedShapeError
+from shacl.sparql_validator import (
+    SparqlValidator,
+    SparqlViolationQuery,
+    build_violation_results,
+)
+from shacl.types import IllFormedShapeError, UnsupportedShapeError
 
 EX = Namespace("http://example.org/shacl-test/")
 
@@ -221,7 +225,7 @@ def test_inverse_path_compiles_for_class_constraint() -> None:
 def test_unsupported_repetition_paths_raise(
     path_ttl: str, path_type: str
 ) -> None:
-    with pytest.raises(NotImplementedError, match=path_type):
+    with pytest.raises(UnsupportedShapeError, match=path_type):
         _compile(
             f"""
             ex:PathShape a sh:PropertyShape ;
@@ -300,7 +304,7 @@ def test_unsupported_constraint_aborts_compilation() -> None:
         """
     )
 
-    with pytest.raises(NotImplementedError, match="No SPARQL validator"):
+    with pytest.raises(UnsupportedShapeError, match="Unsupported SHACL Core"):
         SparqlValidator(shapes).validate()
 
 
@@ -836,3 +840,166 @@ def test_executes_min_inclusive_incomparable_values_are_violations() -> None:
         (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
         (EX.Carol, EX.UnknownAge),
     }
+
+
+def test_compile_shape_includes_direct_property_children() -> None:
+    validator = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:nodeKind sh:IRI ;
+              sh:property [
+                sh:path ex:name ;
+                sh:minCount 1
+              ] .
+            """
+        )
+    )
+
+    result = validator.compile_shape(EX.PersonShape)
+
+    assert len(result.queries) == 2
+    assert {query.constraint_iri for query in result.queries} == {
+        SH.NodeKindConstraintComponent,
+        SH.MinCountConstraintComponent,
+    }
+    assert result.has_targets is True
+    assert result.deactivated is False
+
+
+def test_compile_shape_compiles_nested_property() -> None:
+    validator = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:property [
+                sh:path ex:address ;
+                sh:property [
+                  sh:path ex:city ;
+                  sh:minCount 1
+                ]
+              ] .
+            """
+        )
+    )
+
+    result = validator.compile_shape(EX.PersonShape)
+
+    assert len(result.queries) == 1
+    assert result.queries[0].constraint_iri == SH.MinCountConstraintComponent
+    assert result.queries[0].path == str(EX.city)
+    assert result.has_targets is True
+    assert result.deactivated is False
+
+
+def test_compile_shape_rejects_missing_iri_and_bnode_selection() -> None:
+    validator = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person .
+            """
+        )
+    )
+
+    with pytest.raises(IllFormedShapeError, match="was not found"):
+        validator.compile_shape(EX.MissingShape)
+    with pytest.raises(IllFormedShapeError, match="blank nodes cannot be selected"):
+        validator.compile_shape(BNode())
+
+
+def test_compile_shape_without_targets_returns_reason() -> None:
+    result = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:nodeKind sh:IRI .
+            """
+        )
+    ).compile_shape(EX.PersonShape)
+
+    assert result.queries == []
+    assert result.has_targets is False
+    assert result.deactivated is False
+
+
+def test_compile_shape_deactivated_returns_reason() -> None:
+    result = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:deactivated true ;
+              sh:nodeKind sh:IRI .
+            """
+        )
+    ).compile_shape(EX.PersonShape)
+
+    assert result.queries == []
+    assert result.has_targets is True
+    assert result.deactivated is True
+
+
+def test_compile_shape_unsupported_core_uses_public_error() -> None:
+    validator = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:minLength 1 .
+            """
+        )
+    )
+
+    with pytest.raises(UnsupportedShapeError, match="MinLengthConstraintComponent"):
+        validator.compile_shape(EX.PersonShape)
+
+
+def test_compile_shape_rejects_sparql_target() -> None:
+    validator = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape sh:target [ a sh:SPARQLTarget ;
+              sh:select "SELECT ?this WHERE { ?this a ex:Person }"
+            ] ;
+              sh:nodeKind sh:IRI .
+            """
+        )
+    )
+
+    with pytest.raises(UnsupportedShapeError, match=r"SPARQL-based target sh:target"):
+        validator.compile_shape(EX.PersonShape)
+
+
+def test_result_builder_combines_bindings_and_metadata_without_cardinality_value() -> None:
+    queries = SparqlValidator(
+        _parse(
+            """
+            ex:PersonShape a sh:NodeShape ;
+              sh:targetClass ex:Person ;
+              sh:property ex:NameShape .
+            ex:NameShape a sh:PropertyShape ;
+              sh:path ex:name ;
+              sh:minCount 1 ;
+              sh:message "Name is required" .
+            """
+        )
+    ).compile_shape(EX.PersonShape).queries
+
+    violations = build_violation_results(
+        queries[0],
+        [{"focus_node": {"type": "uri", "value": str(EX.Alice)}}],
+    )
+
+    assert violations == [
+        {
+            "focus_node": str(EX.Alice),
+            "source_shape": str(EX.NameShape),
+            "source_constraint_component": str(SH.MinCountConstraintComponent),
+            "result_path": str(EX.name),
+            "result_message": "Name is required",
+            "result_severity": str(SH.Violation),
+        }
+    ]
