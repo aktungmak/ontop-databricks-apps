@@ -28,7 +28,7 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 | R2RML mapping as evaluation context | Not started |
 | Check that classes and predicates appear in the mapping | Not started |
 | App / MCP integration | Not started |
-| Parse tests (`python3 -m pytest shacl/tests -q`) | Done |
+| Parse tests (`python3 -m pytest shacl/tests -q` from `src/app`) | Done |
 
 ## SPARQL validators (SHACL Core)
 
