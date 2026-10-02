@@ -1,6 +1,6 @@
 PROFILE ?= DEFAULT
 
-.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run app-test shacl-test ui-test destroy-app destroy-mappings destroy-volume destroy
+.PHONY: validate deploy-volume deploy-mappings deploy-app deploy run app-test shacl-test shacl-it shacl-it-destroy ui-test destroy-app destroy-mappings destroy-volume destroy
 
 validate:
 	databricks bundle validate --strict -t volume --profile $(PROFILE)
@@ -25,7 +25,14 @@ app-test:
 	cd src/app && python3 -m pytest tests/ -q
 
 shacl-test:
-	cd src/app && python3 -m pytest shacl/tests -q
+	cd src/app && python3 -m pytest shacl/tests -m "not integration" -q
+
+shacl-it:
+	BUNDLE_VAR_instance=shacl-it $(MAKE) run PROFILE=$(PROFILE)
+	python3 scripts/run-shacl-it.py --profile $(PROFILE)
+
+shacl-it-destroy:
+	BUNDLE_VAR_instance=shacl-it $(MAKE) destroy PROFILE=$(PROFILE)
 
 ui-test:
 	cd src/app/static/mapper && npm install --no-fund --no-audit && npm test

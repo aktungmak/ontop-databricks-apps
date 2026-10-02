@@ -1,10 +1,48 @@
-# SHACL rules over a Virtual Knowledge Graph
+# SHACL rules over an Ontop Virtual Knowledge Graph
 
-Libraries such as pySHACL and SHACL2SPARQL already exist, but they are built for purpose-built triplestores.
-A virtual knowledge graph like Ontop has different performance and SPARQL-subset constraints. For example projected variables must be uniquely typed, queries must push down to a single SQL statement, and graph-wide
-`COUNT` scans are not viable.
+This package compiles SHACL Core semantics into SPARQL `SELECT` queries that
+report violations. It is intended to generate SPARQL that takes into account
+the characteristics of a virtual knowledge graph like Ontop.
 
-This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries that report violations. Mapping-aware checks against R2RML are planned so predicates and classes can be confirmed to appear in the VKG before execution.
+## Separation-of-concerns contract
+
+The SHACL layer:
+
+- preserves SHACL focus-node, value-node, and violation semantics;
+- emits valid SPARQL 1.1 suitable for the supported Ontop query surface;
+- refuses only SHACL features that are not implemented or that necessarily
+  generate a known Ontop/VKG anti-pattern listed below
+- never rewrites or weakens SHACL semantics merely to influence SQL pushdown
+
+Ontop owns SPARQL parsing, ontology-aware evaluation and reformulation. Ontop
+and the app's existing execution layer own native SQL generation and Databricks
+SQL execution. Whether valid SPARQL has uniquely typed projected variables,
+fully eliminates post-processing, or translates efficiently is therefore an
+Ontop/runtime result, not a reason for this compiler to change its semantics.
+
+RDFlib execution tests are convenient semantic regression checks. Live queries
+sent through the deployed app's `/sparql` endpoint are authoritative for the
+supported Ontop version, mappings, ontology, and Databricks SQL runtime.
+
+## Known Ontop/VKG anti-patterns
+
+Compiler refusals are intentionally narrow:
+
+| Pattern | Compiler behavior | Reason |
+| --- | --- | --- |
+| User-supplied `sh:zeroOrMorePath`, `sh:oneOrMorePath`, or `sh:zeroOrOnePath` | Refuse | General arbitrary-length property paths are not supported by Ontop. Class and targetClass subclass closure is `rdf:type` plus Ontop TBox rewriting, not a property-path star. |
+| `sh:closed` | Refuse while unimplemented | A faithful generic implementation enumerates predicates with a fully unbound predicate pattern so the app rejects that VKG-wide scan. A future implementation needs a mapping-aware finite predicate set. |
+| `sh:target` and `sh:sparql` | Refuse while unimplemented | Only SHACL Core predicates are in scope so SHACL-SPARQL rejected. |
+| A parsed SHACL Core component without a registered validator | Refuse while unimplemented | Silently omitting a constraint would produce an unsound conformance result. |
+
+The following are **not** compiler anti-patterns: `OPTIONAL`, `UNION`,
+subqueries, `DISTINCT`, aggregates, `GROUP BY`/`HAVING`, `FILTER`,
+`NOT EXISTS`, `VALUES`, `BIND`, fixed inverse/sequence/alternative paths,
+`REGEX`, RDF term tests, or datatype comparisons. They remain valid SPARQL and
+Ontop decides whether each concrete query can be reformulated and executed.
+In particular, this layer adds no restriction solely because an expression may
+be difficult to translate to SQL. See the repository's `SPARQL_FEATURES.md` for
+runtime guidance, which is diagnostic rather than compiler policy.
 
 ## Status
 
@@ -29,7 +67,8 @@ This package compiles SHACL Core into SPARQL `CONSTRUCT` or `SELECT` queries tha
 | R2RML mapping as evaluation context | Not started |
 | Check that classes and predicates appear in the mapping | Not started |
 | App / MCP integration | Done for `validate_shacl(shapes_turtle, shape_iri)` |
-| Parse tests (`python3 -m pytest shacl/tests -q` from `src/app`) | Done |
+| Parse tests (`python3 -m pytest shacl/tests -m "not integration" -q` from `src/app`) | Done |
+| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes, supported complex paths, conforming results, pattern flags, node kinds, range comparability, and distinct cardinality (`make shacl-it-destroy` tears the instance down) |
 
 ## SPARQL validators (SHACL Core)
 
@@ -45,7 +84,7 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property and node shapes; `rdf:type/rdfs:subClassOf*`) |
+| `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property and node shapes; `rdf:type` plus Ontop TBox) |
 | `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property and node shapes) |
 | `NodeKindValidator` | `sh:NodeKindConstraintComponent` | `sh:nodeKind` | Done | Done (property and node shapes) |
 
@@ -116,6 +155,15 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Not started |
 | `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Not started |
 
-**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality remains property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time, while `ClassValidator` retains its hardcoded `rdf:type/rdfs:subClassOf*` check.
+**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality remains property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
+
+`sh:targetClass` and `ClassValidator` emit direct `rdf:type` and rely on
+Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use
+`COUNT(DISTINCT ?value)` because SHACL counts value nodes, not SPARQL solution
+multiplicity. Ontop full-native reformulation currently crashes
+(`NativeNode cannot accept a visitor`) when this aggregate is applied to a
+TBox-expanded superclass such as `ex:GeographicArea`; the valid live
+subclass-closure/minCount case remains as a failing regression test while a
+scalable reformulation is designed.
 
 `ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.
