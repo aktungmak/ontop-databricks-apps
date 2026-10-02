@@ -78,7 +78,7 @@ def test_compiles_min_count_with_inherited_class_target_and_default_metadata() -
         in query
     )
     assert "GROUP BY ?focus_node" in query
-    assert "HAVING (COUNT(?value) < 1)" in query
+    assert "HAVING (COUNT(DISTINCT ?value) < 1)" in query
 
 
 def test_compiles_max_count_with_target_node_and_required_path() -> None:
@@ -102,7 +102,7 @@ def test_compiles_max_count_with_target_node_and_required_path() -> None:
     assert "UNION" in query
     assert "?focus_node <http://example.org/shacl-test/name> ?value" in query
     assert "OPTIONAL" not in query
-    assert "HAVING (COUNT(?value) > 1)" in query
+    assert "HAVING (COUNT(DISTINCT ?value) > 1)" in query
 
 
 def test_compiles_datatype_with_target_subjects_of() -> None:
@@ -358,6 +358,56 @@ def test_executes_min_count_with_inherited_target_class_including_blank_nodes() 
     assert any(isinstance(node, BNode) for node in focus_nodes)
 
 
+def test_target_class_subclass_closure_is_delegated_to_ontop_tbox() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )[0]
+    graph = _data(
+        """
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Employee rdfs:subClassOf ex:Person .
+        ex:Alice a ex:Person ; ex:name "Alice" .
+        ex:Bob a ex:Employee .
+        """
+    )
+
+    query = _normalized(compiled.query)
+    assert (
+        "?focus_node "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/shacl-test/Person> ."
+    ) in query
+    assert "subClassOf" not in query
+    # rdflib does not apply the Ontop TBox, so Bob is not a focus node here.
+    assert list(graph.query(compiled.query)) == []
+
+
+def test_cardinality_counts_distinct_value_nodes_across_alternative_path() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetNode ex:Alice ;
+          sh:path [ sh:alternativePath ( ex:name ex:label ) ] ;
+          sh:maxCount 1 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice ex:name "Alice" ; ex:label "Alice" .
+        """
+    )
+
+    assert list(graph.query(compiled.query)) == []
+
+
 def test_executes_node_shape_leaf_constraint_for_blank_focus_node() -> None:
     compiled = _compile(
         """
@@ -524,10 +574,10 @@ def test_compiles_class_with_not_exists_and_literal_filter() -> None:
     assert "NOT EXISTS" in query
     assert "isLiteral(?value)" in query
     assert (
-        "?value <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/"
-        "<http://www.w3.org/2000/01/rdf-schema#subClassOf>* "
+        "?value <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
         "<http://example.org/shacl-test/PostalAddress> ."
     ) in query
+    assert "subClassOf" not in query
     assert (
         "?focus_node <http://example.org/shacl-test/address> ?value ."
         in query
@@ -582,8 +632,10 @@ def test_executes_class_and_returns_untyped_and_literal_values() -> None:
         """
     )
 
+    # rdflib does not apply Ontop TBox; DanaHome is only typed as a subclass.
     assert {tuple(row) for row in graph.query(compiled.query)} == {
         (EX.Bob, EX.BobHome),
+        (EX.Dana, EX.DanaHome),
         (EX.Carol, next(graph.objects(EX.Carol, EX.address))),
     }
 

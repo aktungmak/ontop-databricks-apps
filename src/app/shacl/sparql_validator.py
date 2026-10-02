@@ -68,7 +68,7 @@ UNSUPPORTED_SHACL_INVENTORY = (
     "temporary SHACL Core gaps (components without a registered validator)",
     "SPARQL-based targets (sh:target)",
     "SPARQL-based constraints (sh:sparql)",
-    "repetition paths (sh:zeroOrMorePath/*, sh:oneOrMorePath/+, sh:zeroOrOnePath/?)",
+    "user-supplied repetition paths (sh:zeroOrMorePath/*, sh:oneOrMorePath/+, sh:zeroOrOnePath/?)",
     "sh:closed",
 )
 
@@ -84,9 +84,11 @@ def property_path_sparql(path: PropertyPath) -> str:
         return f"^({inner})"
     if isinstance(path, SequencePath):
         parts = [
-            f"({property_path_sparql(part)})"
-            if isinstance(part, AlternativePath)
-            else property_path_sparql(part)
+            (
+                f"({property_path_sparql(part)})"
+                if isinstance(part, AlternativePath)
+                else property_path_sparql(part)
+            )
             for part in path.paths
         ]
         return " / ".join(parts)
@@ -245,7 +247,7 @@ WHERE {{
   OPTIONAL {{ ?focus_node {ctx.path_sparql} ?value }}
 }}
 GROUP BY ?focus_node
-HAVING (COUNT(?value) < {constraint.minCount})"""
+HAVING (COUNT(DISTINCT ?value) < {constraint.minCount})"""
         return self._query(ctx, constraint, query)
 
 
@@ -262,7 +264,7 @@ WHERE {{
   ?focus_node {ctx.path_sparql} ?value
 }}
 GROUP BY ?focus_node
-HAVING (COUNT(?value) > {constraint.maxCount})"""
+HAVING (COUNT(DISTINCT ?value) > {constraint.maxCount})"""
         return self._query(ctx, constraint, query)
 
 
@@ -278,7 +280,7 @@ WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
   {ctx.value_nodes_sparql}
   FILTER (isLiteral(?value) || NOT EXISTS {{
-    ?value <http://www.w3.org/1999/02/22-rdf-syntax-ns#type>/<http://www.w3.org/2000/01/rdf-schema#subClassOf>* {class_iri} .
+    ?value <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> {class_iri} .
   }})
 }}"""
         return self._query(ctx, constraint, query)
@@ -453,9 +455,7 @@ class SparqlValidator:
         for child_ref, child in property_children:
             self._check_unsupported_shape(child_ref, child)
             queries.extend(
-                self._validation_results_for_focus(
-                    child_ref, child, focus_nodes_sparql
-                )
+                self._validation_results_for_focus(child_ref, child, focus_nodes_sparql)
             )
         return ShapeCompileResult(queries=queries)
 
@@ -480,9 +480,7 @@ class SparqlValidator:
         if focus_nodes_sparql is None:
             return []
 
-        return self._validation_results_for_focus(
-            shape_ref, shape, focus_nodes_sparql
-        )
+        return self._validation_results_for_focus(shape_ref, shape, focus_nodes_sparql)
 
     def _validation_results_for_focus(
         self,
@@ -595,11 +593,7 @@ class SparqlValidator:
         if not target_patterns:
             return None
         unions = "\n    UNION\n    ".join(f"{{ {part} }}" for part in target_patterns)
-        return (
-            "SELECT DISTINCT ?focus_node WHERE {\n"
-            f"    {unions}\n"
-            "  }"
-        )
+        return f"SELECT DISTINCT ?focus_node WHERE {{\n {unions}\n  }}"
 
     def _focus_nodes_for_target(self, target: Target) -> str | None:
         if isinstance(target, TargetClass):

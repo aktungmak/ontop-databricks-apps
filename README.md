@@ -99,6 +99,7 @@ TBox tools use the in-memory ontology only. `execute_sparql` uses Ontop + Databr
 
 The app's start command and environment variables are defined under the app's `config`
 block in `databricks.yml` rather than having a separate `app.yaml`.
+This means that deployments always need to be done via DABs and not using the Apps UI.
 
 Bundle variables in `databricks.yml`:
 
