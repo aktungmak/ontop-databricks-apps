@@ -26,7 +26,7 @@ MISSING_USER_TOKEN = (
 )
 
 
-def normalize_access_token(raw: str) -> str:
+def normalise_access_token(raw: str) -> str:
     """Strip optional ``Bearer `` prefix from a forwarded access token."""
     token = raw.strip()
     if token.lower().startswith("bearer "):
@@ -35,11 +35,11 @@ def normalize_access_token(raw: str) -> str:
 
 
 def token_from_headers(headers: Mapping[str, str]) -> str | None:
-    """Return normalized ``x-forwarded-access-token``, or ``None`` if missing."""
+    """Return normalised ``x-forwarded-access-token``, or ``None`` if missing."""
     raw = headers.get("x-forwarded-access-token")
     if not raw:
         return None
-    return normalize_access_token(raw)
+    return normalise_access_token(raw)
 
 
 def get_user_token(request: Request) -> str:

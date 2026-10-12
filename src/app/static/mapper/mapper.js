@@ -12,6 +12,7 @@ import {
   mergeTurtleIntoStore,
   newEmptyCard,
   tableToFragmentId,
+  isPlaceholderMapId,
   addTriplesMap,
   removeTriplesMap,
   renameTriplesMap,
@@ -312,11 +313,25 @@ function attachAutocomplete(input, getOptions, { prepare } = {}) {
     list.classList.remove('open');
   }
 
+  function optionValue(o) {
+    return typeof o === 'string' ? o : o.value;
+  }
+
+  function optionText(o) {
+    return typeof o === 'string' ? o : o.text;
+  }
+
   function renderList(options) {
     if (document.activeElement !== input) return;
 
     const query = (input.value || '').toLowerCase();
-    const opts = options.filter((o) => !query || String(o).toLowerCase().includes(query));
+    const opts = options.filter((o) => {
+      if (!query) return true;
+      return (
+        optionText(o).toLowerCase().includes(query) ||
+        optionValue(o).toLowerCase().includes(query)
+      );
+    });
     list.innerHTML = '';
     if (!opts.length) {
       hideList();
@@ -325,10 +340,10 @@ function attachAutocomplete(input, getOptions, { prepare } = {}) {
     opts.slice(0, 50).forEach((o) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = o;
+      btn.textContent = optionText(o);
       btn.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        input.value = o;
+        input.value = optionValue(o);
         hideList();
         input.dispatchEvent(new Event('change', { bubbles: true }));
       });
@@ -414,16 +429,22 @@ function wireTemplateColumnInsert(select, templateInput, getTableName, onAfterIn
   });
 }
 
+function formatOntologyOption(term) {
+  const value = compactIri(term.iri, state.prefixes);
+  if (!term.label) return value;
+  return { value, text: `${value} (${term.label})` };
+}
+
 function classOptions() {
   const active = state.ontologies.some((o) => o.active);
   if (!active) return [];
-  return state.ontologyIndex.classes.map((c) => compactIri(c, state.prefixes));
+  return state.ontologyIndex.classes.map(formatOntologyOption);
 }
 
 function propertyOptions() {
   const active = state.ontologies.some((o) => o.active);
   if (!active) return [];
-  return state.ontologyIndex.properties.map((p) => compactIri(p, state.prefixes));
+  return state.ontologyIndex.properties.map(formatOntologyOption);
 }
 
 function createUcPicker(container, initial = {}, onChange) {
@@ -620,13 +641,12 @@ function renderTriplesMapCard(card, cards) {
       article.querySelector('[data-field="tableName"]').value = full;
       updateLogicalTable(state.store, card.id, { type: 'tableName', value: full });
       resetColumnInsertSelects(article);
-      if (!card.id || card.id === '#NewMap') {
-        const newId = tableToFragmentId(full);
+      if (!card.id || isPlaceholderMapId(card.id)) {
+        const newId = renameTriplesMap(state.store, card.id, tableToFragmentId(full));
         if (collapsedTriplesMaps.has(card.id)) {
           collapsedTriplesMaps.delete(card.id);
           collapsedTriplesMaps.add(newId);
         }
-        renameTriplesMap(state.store, card.id, newId);
         renderVisualEditor();
       }
       markDirty();
@@ -669,26 +689,30 @@ function renderTriplesMapCard(card, cards) {
   });
   article.querySelector('[data-field="id"]').addEventListener('change', (e) => {
     const oldId = card.id;
-    let newId = e.target.value.trim();
-    if (!newId.startsWith('#')) newId = `#${newId}`;
+    let requestedId = e.target.value.trim();
+    if (!requestedId.startsWith('#')) requestedId = `#${requestedId}`;
+    const newId = renameTriplesMap(state.store, oldId, requestedId);
     if (collapsedTriplesMaps.has(oldId)) {
       collapsedTriplesMaps.delete(oldId);
       collapsedTriplesMaps.add(newId);
     }
-    renameTriplesMap(state.store, oldId, newId);
     renderVisualEditor();
     markDirty();
   });
   const smTemplateInput = article.querySelector('[data-field="sm-template"]');
-  smTemplateInput.addEventListener('change', (e) => {
-    updateSubjectMap(state.store, card.id, { ...card.subjectMap, template: e.target.value }, state.prefixes);
-    markDirty();
-  });
   const smClassInput = article.querySelector('input[data-field="sm-class"]');
-  smClassInput?.addEventListener('change', (e) => {
-    updateSubjectMap(state.store, card.id, { ...card.subjectMap, class: e.target.value }, state.prefixes);
-    markDirty();
+  const subjectMapFromDom = (patch = {}) => ({
+    template: smTemplateInput?.value ?? card.subjectMap.template ?? '',
+    column: card.subjectMap.column ?? '',
+    class: smClassInput?.value ?? card.subjectMap.class ?? '',
+    ...patch,
   });
+  const commitSubjectMap = (patch = {}) => {
+    updateSubjectMap(state.store, card.id, subjectMapFromDom(patch), state.prefixes);
+    markDirty();
+  };
+  smTemplateInput.addEventListener('change', (e) => commitSubjectMap({ template: e.target.value }));
+  smClassInput?.addEventListener('change', (e) => commitSubjectMap({ class: e.target.value }));
 
   const getTableName = () => tableNameForTriplesMap(card.id);
 
@@ -697,10 +721,7 @@ function renderTriplesMapCard(card, cards) {
       article.querySelector('[data-sm-template-columns]'),
       smTemplateInput,
       getTableName,
-      () => {
-        updateSubjectMap(state.store, card.id, { ...card.subjectMap, template: smTemplateInput.value }, state.prefixes);
-        markDirty();
-      },
+      () => commitSubjectMap({ template: smTemplateInput.value }),
     );
   }
   attachAutocomplete(smClassInput, classOptions);
