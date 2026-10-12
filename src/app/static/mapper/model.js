@@ -163,7 +163,7 @@ function remapTerm(term, idMap) {
   return term;
 }
 
-function normalizeBlankNodeIds(store) {
+function normaliseBlankNodeIds(store) {
   const quads = store.getQuads(null, null, null, null);
   const idMap = new Map();
   const used = new Set();
@@ -194,9 +194,9 @@ function normalizeBlankNodeIds(store) {
 
   if (idMap.size === 0) return store;
 
-  const normalized = new Store();
+  const normalised = new Store();
   for (const q of quads) {
-    normalized.addQuad(
+    normalised.addQuad(
       quad(
         remapTerm(q.subject, idMap),
         q.predicate,
@@ -205,7 +205,7 @@ function normalizeBlankNodeIds(store) {
       ),
     );
   }
-  return normalized;
+  return normalised;
 }
 
 function countBlankReferences(store) {
@@ -330,7 +330,7 @@ export function parseTurtle(turtle, prefixes = {}) {
   const quads = parser.parse(turtle);
   const store = new Store();
   for (const q of quads) store.addQuad(q);
-  return normalizeBlankNodeIds(store);
+  return normaliseBlankNodeIds(store);
 }
 
 function storeToQuads(storeOrQuads) {
@@ -610,27 +610,40 @@ function literalTerm(value) {
   return literal(value);
 }
 
-// Distinct map ids must stay distinct here: the result labels the blank nodes of
-// a triples map, so two ids collapsing to one label would make two maps share a
-// logical table. Dropping characters is not injective since `main.sales.orders` and
-// `main.sale.sorders` collide, so each character outside [a-zA-Z0-9], including
-// `_` itself, becomes a delimited `_<hex>_` escape.
-function sanitizeMapId(mapId) {
-  return normalizeMapId(mapId)
-    .slice(1)
-    .replace(/[^a-zA-Z0-9]/g, (ch) => `_${ch.charCodeAt(0).toString(16).toUpperCase()}_`);
-}
-
-function normalizeMapId(mapId) {
+function normaliseMapId(mapId) {
   return mapId.startsWith('#') ? mapId : `#${mapId}`;
 }
 
+const PLACEHOLDER_MAP_ID = /^#NewMap(?:-\d+)?$/;
+
+export function isPlaceholderMapId(mapId) {
+  return PLACEHOLDER_MAP_ID.test(normaliseMapId(mapId || ''));
+}
+
+export function collectMapIds(store) {
+  return store
+    .getQuads(null, namedNode(`${RDF}type`), namedNode(`${RR}TriplesMap`), null)
+    .map((q) => fragmentId(q.subject));
+}
+
+export function uniqueMapId(preferred, usedIds, { ignore } = {}) {
+  const wanted = normaliseMapId(preferred || 'NewMap');
+  const ignoreNorm = ignore ? normaliseMapId(ignore) : '';
+  const used = new Set(
+    [...usedIds].map((id) => normaliseMapId(id)).filter((id) => id !== ignoreNorm),
+  );
+  if (!used.has(wanted)) return wanted;
+  let n = 2;
+  while (used.has(`${wanted}-${n}`)) n += 1;
+  return `${wanted}-${n}`;
+}
+
 function mapIriTerm(id) {
-  return namedNode(normalizeMapId(id));
+  return namedNode(normaliseMapId(id));
 }
 
 function findTriplesMap(store, mapId) {
-  const norm = normalizeMapId(mapId);
+  const norm = normaliseMapId(mapId);
   const mapNodes = store
     .getQuads(null, namedNode(`${RDF}type`), namedNode(`${RR}TriplesMap`), null)
     .map((q) => q.subject);
@@ -717,8 +730,7 @@ function writeObjectMapDatatype(store, omNode, objectMap, prefixes) {
   }
 }
 
-function writeObjectMap(store, omNode, objectMap, prefixes, mapId, idx) {
-  const sanitized = sanitizeMapId(mapId);
+function writeObjectMap(store, omNode, objectMap, prefixes) {
   const omType = objectMap.type;
 
   if (omType === 'column') {
@@ -739,7 +751,7 @@ function writeObjectMap(store, omNode, objectMap, prefixes, mapId, idx) {
     const child = (objectMap.joinCondition?.child ?? '').trim();
     const parent = (objectMap.joinCondition?.parent ?? '').trim();
     if (child && parent) {
-      const jc = blankNode(`jc_${sanitized}_${idx}`);
+      const jc = blankNode();
       store.addQuad(quad(omNode, namedNode(`${RR}joinCondition`), jc));
       store.addQuad(quad(jc, namedNode(`${RR}child`), literalTerm(child)));
       store.addQuad(quad(jc, namedNode(`${RR}parent`), literalTerm(parent)));
@@ -749,12 +761,12 @@ function writeObjectMap(store, omNode, objectMap, prefixes, mapId, idx) {
 
 export function addTriplesMap(store, card, prefixes = {}) {
   const p = mergePrefixes(DEFAULT_PREFIXES, prefixes);
-  const mapIri = mapIriTerm(card.id);
-  const sanitized = sanitizeMapId(card.id);
+  const id = uniqueMapId(card.id, collectMapIds(store));
+  const mapIri = mapIriTerm(id);
 
   store.addQuad(quad(mapIri, namedNode(`${RDF}type`), namedNode(`${RR}TriplesMap`)));
 
-  const lt = blankNode(`lt_${sanitized}`);
+  const lt = blankNode();
   store.addQuad(quad(mapIri, namedNode(`${RR}logicalTable`), lt));
   if (card.logicalTable.type === 'sqlQuery') {
     store.addQuad(quad(lt, namedNode(`${RR}SQLQuery`), literalTerm(card.logicalTable.value)));
@@ -762,7 +774,7 @@ export function addTriplesMap(store, card, prefixes = {}) {
     store.addQuad(quad(lt, namedNode(`${RR}tableName`), literalTerm(card.logicalTable.value)));
   }
 
-  const sm = blankNode(`sm_${sanitized}`);
+  const sm = blankNode();
   store.addQuad(quad(mapIri, namedNode(`${RR}subjectMap`), sm));
   if (card.subjectMap.template) {
     store.addQuad(quad(sm, namedNode(`${RR}template`), literalTerm(card.subjectMap.template)));
@@ -775,16 +787,16 @@ export function addTriplesMap(store, card, prefixes = {}) {
     if (cls) store.addQuad(quad(sm, namedNode(`${RR}class`), cls));
   }
 
-  card.predicateObjectMaps.forEach((pom, idx) => {
+  card.predicateObjectMaps.forEach((pom) => {
     if (pom.objectMap.type === 'stub') return;
-    const pomNode = blankNode(`pom_${sanitized}_${idx}`);
+    const pomNode = blankNode();
     store.addQuad(quad(mapIri, namedNode(`${RR}predicateObjectMap`), pomNode));
     const pred = iriTerm(pom.predicate, p);
     if (pred) store.addQuad(quad(pomNode, namedNode(`${RR}predicate`), pred));
 
-    const om = blankNode(`om_${sanitized}_${idx}`);
+    const om = blankNode();
     store.addQuad(quad(pomNode, namedNode(`${RR}objectMap`), om));
-    writeObjectMap(store, om, pom.objectMap, p, card.id, idx);
+    writeObjectMap(store, om, pom.objectMap, p);
   });
 }
 
@@ -793,15 +805,15 @@ export function removeTriplesMap(store, mapId) {
 }
 
 export function renameTriplesMap(store, oldId, newId) {
-  const oldNorm = normalizeMapId(oldId);
-  const newNorm = normalizeMapId(newId);
-  if (oldNorm === newNorm) return;
+  const oldNorm = normaliseMapId(oldId);
+  const newNorm = uniqueMapId(newId, collectMapIds(store), { ignore: oldNorm });
+  if (oldNorm === newNorm) return newNorm;
 
   const oldNode = mapIriTerm(oldNorm);
   const newNode = mapIriTerm(newNorm);
 
   const mapQuads = store.getQuads(oldNode, null, null, null);
-  if (mapQuads.length === 0) return;
+  if (mapQuads.length === 0) return oldNorm;
 
   for (const q of mapQuads) {
     store.removeQuad(q);
@@ -813,6 +825,7 @@ export function renameTriplesMap(store, oldId, newId) {
     store.removeQuad(q);
     store.addQuad(quad(q.subject, q.predicate, newNode, q.graph));
   }
+  return newNorm;
 }
 
 export function updateLogicalTable(store, mapId, logicalTable) {
@@ -821,7 +834,7 @@ export function updateLogicalTable(store, mapId, logicalTable) {
 
   let ltNode = getLinkedBlank(store, mapNode, namedNode(`${RR}logicalTable`));
   if (!ltNode) {
-    ltNode = blankNode(`lt_${sanitizeMapId(mapId)}`);
+    ltNode = blankNode();
     store.addQuad(quad(mapNode, namedNode(`${RR}logicalTable`), ltNode));
   }
 
@@ -844,7 +857,7 @@ export function updateSubjectMap(store, mapId, subjectMap, prefixes = {}) {
   const p = mergePrefixes(DEFAULT_PREFIXES, prefixes);
   let smNode = getLinkedBlank(store, mapNode, namedNode(`${RR}subjectMap`));
   if (!smNode) {
-    smNode = blankNode(`sm_${sanitizeMapId(mapId)}`);
+    smNode = blankNode();
     store.addQuad(quad(mapNode, namedNode(`${RR}subjectMap`), smNode));
   }
 
@@ -858,11 +871,8 @@ export function addPredicateObjectMap(store, mapId) {
   const mapNode = findTriplesMap(store, mapId);
   if (!mapNode) return;
 
-  const existingPoms = getObjects(store, mapNode, namedNode(`${RR}predicateObjectMap`));
-  const idx = existingPoms.length;
-  const sanitized = sanitizeMapId(mapId);
-  const pomNode = blankNode(`pom_${sanitized}_${idx}`);
-  const omNode = blankNode(`om_${sanitized}_${idx}`);
+  const pomNode = blankNode();
+  const omNode = blankNode();
 
   store.addQuad(quad(mapNode, namedNode(`${RR}predicateObjectMap`), pomNode));
   store.addQuad(quad(pomNode, namedNode(`${RR}objectMap`), omNode));
@@ -898,8 +908,7 @@ export function updatePredicateObjectMap(store, mapId, pomIndex, pom, prefixes =
   let pomNode = pomNodes[pomIndex];
 
   if (!pomNode) {
-    const sanitized = sanitizeMapId(mapId);
-    pomNode = blankNode(`pom_${sanitized}_${pomIndex}`);
+    pomNode = blankNode();
     store.addQuad(quad(mapNode, namedNode(`${RR}predicateObjectMap`), pomNode));
   }
 
@@ -915,9 +924,9 @@ export function updatePredicateObjectMap(store, mapId, pomIndex, pom, prefixes =
     removeObjectMapSubgraph(store, oldOm);
   }
 
-  const omNode = blankNode(`om_${sanitizeMapId(mapId)}_${pomIndex}`);
+  const omNode = blankNode();
   store.addQuad(quad(pomNode, omPred, omNode));
-  writeObjectMap(store, omNode, pom.objectMap, p, mapId, pomIndex);
+  writeObjectMap(store, omNode, pom.objectMap, p);
 }
 
 export function newEmptyCard(tableName = '') {

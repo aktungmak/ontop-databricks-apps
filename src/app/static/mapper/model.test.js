@@ -14,6 +14,8 @@ import {
   mergePrefixes,
   mergeTurtleIntoStore,
   newEmptyCard,
+  isPlaceholderMapId,
+  uniqueMapId,
   parseTriplesMaps,
   parseTurtle,
   removeTriplesMap,
@@ -388,7 +390,13 @@ describe('newEmptyCard', () => {
     assert.equal(card.logicalTable.value, '');
   });
 
-  // mapper.js renames a card only while its id is still the #NewMap placeholder.
+  it('treats numbered NewMap ids as placeholders', () => {
+    assert.equal(isPlaceholderMapId('#NewMap'), true);
+    assert.equal(isPlaceholderMapId('#NewMap-2'), true);
+    assert.equal(isPlaceholderMapId('#Customer'), false);
+  });
+
+  // mapper.js renames a card only while its id is still a generated placeholder.
   it('renames the placeholder card once a table is picked', async () => {
     const store = new Store();
     const card = newEmptyCard();
@@ -403,6 +411,102 @@ describe('newEmptyCard', () => {
     assert.equal(maps.length, 1);
     assert.equal(maps[0].id, '#samples.tpch.orders');
     assert.equal(maps[0].logicalTable.value, table);
+  });
+});
+
+describe('distinct triples maps', () => {
+  it('allocates a unique id when #NewMap already exists', () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    const ids = parseTriplesMaps(store).map((m) => m.id).sort();
+    assert.deepEqual(ids, ['#NewMap', '#NewMap-2']);
+  });
+
+  it('keeps two maps for the same table independent after placeholder rename', async () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    updateLogicalTable(store, '#NewMap', { type: 'tableName', value: 'samples.tpch.customer' });
+    updateSubjectMap(
+      store,
+      '#NewMap',
+      { template: 'http://example.org/customer/{c_custkey}', column: '', class: 'ex:Customer' },
+      PREFIXES,
+    );
+    renameTriplesMap(store, '#NewMap', '#Customer');
+
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    const secondId = parseTriplesMaps(store).find((m) => m.id !== '#Customer').id;
+    updateLogicalTable(store, secondId, { type: 'tableName', value: 'samples.tpch.customer' });
+    updateSubjectMap(
+      store,
+      secondId,
+      { template: 'http://example.org/person/{c_custkey}', column: '', class: 'ex:Person' },
+      PREFIXES,
+    );
+    const personId = renameTriplesMap(store, secondId, tableToFragmentId('samples.tpch.customer'));
+    assert.equal(personId, '#samples.tpch.customer');
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    assert.equal(maps.length, 2);
+    const customer = maps.find((m) => m.id === '#Customer');
+    const person = maps.find((m) => m.id === personId);
+    assert.equal(customer.logicalTable.value, 'samples.tpch.customer');
+    assert.equal(customer.subjectMap.template, 'http://example.org/customer/{c_custkey}');
+    assert.equal(customer.subjectMap.class, 'http://example.org/tpch/Customer');
+    assert.equal(person.logicalTable.value, 'samples.tpch.customer');
+    assert.equal(person.subjectMap.template, 'http://example.org/person/{c_custkey}');
+    assert.equal(person.subjectMap.class, 'http://example.org/tpch/Person');
+  });
+
+  it('does not steal the first map when both placeholders pick the same table', async () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    const table = 'samples.tpch.customer';
+    const fragment = tableToFragmentId(table);
+
+    updateLogicalTable(store, '#NewMap', { type: 'tableName', value: table });
+    updateSubjectMap(
+      store,
+      '#NewMap',
+      { template: 'http://example.org/customer/{id}', column: '', class: '' },
+      PREFIXES,
+    );
+    assert.equal(renameTriplesMap(store, '#NewMap', fragment), fragment);
+
+    updateLogicalTable(store, '#NewMap-2', { type: 'tableName', value: table });
+    updateSubjectMap(
+      store,
+      '#NewMap-2',
+      { template: 'http://example.org/person/{id}', column: '', class: '' },
+      PREFIXES,
+    );
+    assert.equal(renameTriplesMap(store, '#NewMap-2', fragment), `${fragment}-2`);
+
+    const maps = parseTriplesMaps(parseTurtle(await serializeStore(store, PREFIXES), PREFIXES));
+    const byId = Object.fromEntries(maps.map((m) => [m.id, m]));
+    assert.equal(byId[fragment].subjectMap.template, 'http://example.org/customer/{id}');
+    assert.equal(byId[`${fragment}-2`].subjectMap.template, 'http://example.org/person/{id}');
+  });
+
+  it('suffixes a colliding rename instead of merging maps', () => {
+    const store = new Store();
+    addTriplesMap(store, newEmptyCard('samples.tpch.customer'), PREFIXES);
+    addTriplesMap(store, newEmptyCard(), PREFIXES);
+    assert.equal(
+      renameTriplesMap(store, '#NewMap', '#samples.tpch.customer'),
+      '#samples.tpch.customer-2',
+    );
+    assert.deepEqual(
+      parseTriplesMaps(store).map((m) => m.id).sort(),
+      ['#samples.tpch.customer', '#samples.tpch.customer-2'],
+    );
+  });
+
+  it('uniqueMapId skips an ignored id so a map can keep its own name', () => {
+    assert.equal(uniqueMapId('#Customer', ['#Customer', '#Person'], { ignore: '#Customer' }), '#Customer');
+    assert.equal(uniqueMapId('#Customer', ['#Customer', '#Person']), '#Customer-2');
   });
 });
 
