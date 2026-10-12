@@ -946,9 +946,42 @@ const PROPERTY_TYPES = new Set([
   `${OWL}ObjectProperty`,
 ]);
 
+function labelRank(lang) {
+  if (lang === 'en' || lang.startsWith('en-')) return 2;
+  if (!lang) return 1;
+  return 0;
+}
+
+function considerLabel(labels, iri, literal) {
+  if (!literal || literal.termType !== 'Literal') return;
+  const value = literal.value.trim();
+  if (!value) return;
+  const lang = literal.language || '';
+  const prev = labels.get(iri);
+  if (!prev || labelRank(lang) > labelRank(prev.lang)) {
+    labels.set(iri, { value, lang });
+  }
+}
+
+function termsWithLabels(iris, labels) {
+  return [...iris]
+    .sort()
+    .map((iri) => ({ iri, label: labels.get(iri)?.value ?? null }));
+}
+
+function mergeIndexedTerm(map, term) {
+  const existing = map.get(term.iri);
+  if (!existing) {
+    map.set(term.iri, term);
+    return;
+  }
+  if (!existing.label && term.label) map.set(term.iri, term);
+}
+
 function extractOntologyTerms(turtle, prefixes = {}) {
   const classes = new Set();
   const properties = new Set();
+  const labels = new Map();
   let store;
   try {
     store = parseTurtle(turtle, prefixes);
@@ -962,26 +995,29 @@ function extractOntologyTerms(turtle, prefixes = {}) {
       if (CLASS_TYPES.has(q.object.value)) classes.add(q.subject.value);
       if (PROPERTY_TYPES.has(q.object.value)) properties.add(q.subject.value);
     }
+    if (q.predicate.value === `${RDFS}label`) {
+      considerLabel(labels, q.subject.value, q.object);
+    }
   }
   return {
-    classes: [...classes].sort(),
-    properties: [...properties].sort(),
+    classes: termsWithLabels(classes, labels),
+    properties: termsWithLabels(properties, labels),
   };
 }
 
 export function buildOntologyIndex(ontologies, globalPrefixes) {
-  const classes = new Set();
-  const properties = new Set();
+  const classes = new Map();
+  const properties = new Map();
   for (const ont of ontologies) {
     if (!ont.active) continue;
     const prefixes = mergePrefixes(globalPrefixes, extractPrefixes(ont.turtle));
     const terms = extractOntologyTerms(ont.turtle, prefixes);
-    terms.classes.forEach((c) => classes.add(c));
-    terms.properties.forEach((p) => properties.add(p));
+    terms.classes.forEach((c) => mergeIndexedTerm(classes, c));
+    terms.properties.forEach((p) => mergeIndexedTerm(properties, p));
   }
   return {
-    classes: [...classes].sort(),
-    properties: [...properties].sort(),
+    classes: [...classes.values()].sort((a, b) => a.iri.localeCompare(b.iri)),
+    properties: [...properties.values()].sort((a, b) => a.iri.localeCompare(b.iri)),
   };
 }
 

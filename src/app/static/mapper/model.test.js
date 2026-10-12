@@ -503,9 +503,14 @@ describe('buildOntologyIndex', () => {
 @prefix owl: <http://www.w3.org/2002/07/owl#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 
-ex:Person a owl:Class .
-ex:name a owl:DatatypeProperty .
+ex:Person a owl:Class ;
+    rdfs:label "Person"@en ;
+    rdfs:label "Personne"@fr .
+ex:name a owl:DatatypeProperty ;
+    rdfs:label "full name" .
 ex:worksFor a owl:ObjectProperty .
+ex:empty a owl:Class ;
+    rdfs:label "   " .
 `;
 
   it('extracts class and property IRIs from active ontologies', () => {
@@ -514,10 +519,13 @@ ex:worksFor a owl:ObjectProperty .
       { ex: 'http://example.org/' },
     );
 
-    assert.deepEqual(index.classes, ['http://example.org/Person']);
+    assert.deepEqual(index.classes, [
+      { iri: 'http://example.org/empty', label: null },
+      { iri: 'http://example.org/Person', label: 'Person' },
+    ]);
     assert.deepEqual(index.properties, [
-      'http://example.org/name',
-      'http://example.org/worksFor',
+      { iri: 'http://example.org/name', label: 'full name' },
+      { iri: 'http://example.org/worksFor', label: null },
     ]);
   });
 

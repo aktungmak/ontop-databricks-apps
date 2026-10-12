@@ -312,11 +312,25 @@ function attachAutocomplete(input, getOptions, { prepare } = {}) {
     list.classList.remove('open');
   }
 
+  function optionValue(o) {
+    return typeof o === 'string' ? o : o.value;
+  }
+
+  function optionText(o) {
+    return typeof o === 'string' ? o : o.text;
+  }
+
   function renderList(options) {
     if (document.activeElement !== input) return;
 
     const query = (input.value || '').toLowerCase();
-    const opts = options.filter((o) => !query || String(o).toLowerCase().includes(query));
+    const opts = options.filter((o) => {
+      if (!query) return true;
+      return (
+        optionText(o).toLowerCase().includes(query) ||
+        optionValue(o).toLowerCase().includes(query)
+      );
+    });
     list.innerHTML = '';
     if (!opts.length) {
       hideList();
@@ -325,10 +339,10 @@ function attachAutocomplete(input, getOptions, { prepare } = {}) {
     opts.slice(0, 50).forEach((o) => {
       const btn = document.createElement('button');
       btn.type = 'button';
-      btn.textContent = o;
+      btn.textContent = optionText(o);
       btn.addEventListener('mousedown', (e) => {
         e.preventDefault();
-        input.value = o;
+        input.value = optionValue(o);
         hideList();
         input.dispatchEvent(new Event('change', { bubbles: true }));
       });
@@ -414,16 +428,22 @@ function wireTemplateColumnInsert(select, templateInput, getTableName, onAfterIn
   });
 }
 
+function formatOntologyOption(term) {
+  const value = compactIri(term.iri, state.prefixes);
+  if (!term.label) return value;
+  return { value, text: `${value} (${term.label})` };
+}
+
 function classOptions() {
   const active = state.ontologies.some((o) => o.active);
   if (!active) return [];
-  return state.ontologyIndex.classes.map((c) => compactIri(c, state.prefixes));
+  return state.ontologyIndex.classes.map(formatOntologyOption);
 }
 
 function propertyOptions() {
   const active = state.ontologies.some((o) => o.active);
   if (!active) return [];
-  return state.ontologyIndex.properties.map((p) => compactIri(p, state.prefixes));
+  return state.ontologyIndex.properties.map(formatOntologyOption);
 }
 
 function createUcPicker(container, initial = {}, onChange) {
