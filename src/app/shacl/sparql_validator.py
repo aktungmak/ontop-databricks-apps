@@ -70,6 +70,7 @@ UNSUPPORTED_SHACL_INVENTORY = (
     "SPARQL-based constraints (sh:sparql)",
     "user-supplied repetition paths (sh:zeroOrMorePath/*, sh:oneOrMorePath/+, sh:zeroOrOnePath/?)",
     "sh:closed",
+    "COUNT(DISTINCT ?value) on a TBox-expanded superclass (Ontop full-native reformulation crash: NativeNode cannot accept a visitor)",
 )
 
 

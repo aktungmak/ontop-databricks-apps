@@ -194,7 +194,9 @@ _VALIDATE_SHACL_DESCRIPTION = (
     "on node shapes; avoid nesting sh:property under property shapes. "
     "The has_targets flag is a boolean: false means the shape declares no SHACL "
     "targets, so the VKG was not queried (conforms is still true). "
-    "Unsupported constructs: " + "; ".join(UNSUPPORTED_SHACL_INVENTORY) + "."
+    "Unsupported or known-failing constructs: "
+    + "; ".join(UNSUPPORTED_SHACL_INVENTORY)
+    + "."
 )
 
 

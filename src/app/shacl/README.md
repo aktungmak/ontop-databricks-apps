@@ -162,8 +162,9 @@ Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use
 `COUNT(DISTINCT ?value)` because SHACL counts value nodes, not SPARQL solution
 multiplicity. Ontop full-native reformulation currently crashes
 (`NativeNode cannot accept a visitor`) when this aggregate is applied to a
-TBox-expanded superclass such as `ex:GeographicArea`; the valid live
-subclass-closure/minCount case remains as a failing regression test while a
-scalable reformulation is designed.
+TBox-expanded superclass such as `ex:GeographicArea`; that runtime failure is
+listed in `UNSUPPORTED_SHACL_INVENTORY` (the compiler still emits the query).
+The valid live subclass-closure/minCount case remains as a failing regression
+test while a scalable reformulation is designed.
 
 `ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.
