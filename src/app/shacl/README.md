@@ -85,7 +85,7 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
 | `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property and node shapes; `rdf:type` plus Ontop TBox) |
-| `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property and node shapes) |
+| `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property and node shapes). A constraint that cannot produce violations because every mapped value already has the declared datatype may optimize to Ontop `EMPTY`; the SPARQL execution layer maps that to no violations, not a 500. |
 | `NodeKindValidator` | `sh:NodeKindConstraintComponent` | `sh:nodeKind` | Done | Done (property and node shapes) |
 
 ### 4.2 Cardinality (property shapes only)
