@@ -314,6 +314,40 @@ CASES = [
         expect_empty=True,
         query_contains=('lang(?value) != ""',),
     ),
+    ValidatorCase(
+        "has-value",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        'sh:hasValue "EUROPE"',
+        path="ex:name",
+        expected=(ExpectedBinding(REGION_0),),
+        query_contains=('FILTER NOT EXISTS { ?focus_node',),
+    ),
+    ValidatorCase(
+        "has-value-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        'sh:hasValue "AFRICA"',
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "in",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        'sh:in ("EUROPE" "ASIA")',
+        path="ex:name",
+        expected=(ExpectedBinding(REGION_0, "AFRICA"),),
+        query_contains=("sameTerm(?value, ?allowed)",),
+    ),
+    ValidatorCase(
+        "in-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        'sh:in ("AFRICA" "EUROPE")',
+        path="ex:name",
+        expect_empty=True,
+    ),
 ]
 
 

@@ -12,6 +12,8 @@ from .constraint_components import (
     ClassConstraintComponent,
     ConstraintComponent,
     DatatypeConstraintComponent,
+    HasValueConstraintComponent,
+    InConstraintComponent,
     LanguageInConstraintComponent,
     LessThanConstraintComponent,
     LessThanOrEqualsConstraintComponent,
@@ -484,6 +486,55 @@ WHERE {{
   ?focus_node {ctx.path_sparql} ?other_value .
   FILTER (?value != ?other_value && isLiteral(?other_value)
           && lang(?value) = lang(?other_value))
+}}"""
+        return self._query(ctx, constraint, query)
+
+
+@sparql_validator(HasValueConstraintComponent)
+class HasValueValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, HasValueConstraintComponent)
+        expected = constraint.hasValue.n3()
+        if ctx.path_sparql is not None:
+            # Property shape: at least one value node must be the RDF term.
+            query = f"""SELECT ?focus_node
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  FILTER NOT EXISTS {{ ?focus_node {ctx.path_sparql} {expected} . }}
+}}"""
+        else:
+            query = f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  {ctx.value_nodes_sparql}
+  FILTER (!sameTerm(?value, {expected}))
+}}"""
+        return self._query(ctx, constraint, query)
+
+
+def _not_in_terms_filter(terms: list[Node]) -> str:
+    if not terms:
+        return ""
+    allowed = " ".join(term.n3() for term in terms)
+    return f"""FILTER NOT EXISTS {{
+    VALUES ?allowed {{ {allowed} }}
+    FILTER (sameTerm(?value, ?allowed))
+  }}"""
+
+
+@sparql_validator(InConstraintComponent)
+class InValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, InConstraintComponent)
+        query = f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  {ctx.value_nodes_sparql}
+  {_not_in_terms_filter(constraint.in_)}
 }}"""
         return self._query(ctx, constraint, query)
 

@@ -152,10 +152,10 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
 | `ClosedValidator` | `sh:ClosedConstraintComponent` | `sh:closed`, optional `sh:ignoredProperties` | Done | Not started |
-| `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Not started |
-| `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Not started |
+| `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Done (property shapes check existence; node shapes compare the focus node) |
+| `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Done (property and node shapes; empty list flags every value node) |
 
-**29 Core validators.** SPARQL is done for 14 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality and unique language remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
+**29 Core validators.** SPARQL is done for 16 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`, `HasValue`, `In`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality and unique language remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
 
 `sh:targetClass` and `ClassValidator` emit direct `rdf:type` and rely on
 Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use

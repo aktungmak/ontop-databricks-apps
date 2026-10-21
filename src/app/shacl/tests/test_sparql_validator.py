@@ -300,7 +300,7 @@ def test_unsupported_constraint_aborts_compilation() -> None:
         ex:ManagerShape a sh:PropertyShape ;
           sh:targetClass ex:Person ;
           sh:path ex:manager ;
-          sh:in ("ok") .
+          sh:equals ex:manager .
         """
     )
 
@@ -1082,6 +1082,131 @@ def test_executes_unique_lang_on_duplicate_language_tags() -> None:
     assert {tuple(row) for row in graph.query(compiled.query)} == {(EX.Alice,)}
 
 
+def test_compiles_has_value_as_not_exists_on_the_path() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:hasValue "Alice" .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.HasValueConstraintComponent
+    query = _normalized(compiled.query)
+    assert "SELECT ?focus_node" in query
+    assert "?value" not in query
+    assert (
+        'FILTER NOT EXISTS { ?focus_node <http://example.org/shacl-test/name> "Alice" . }'
+        in query
+    )
+
+
+def test_executes_has_value_when_the_expected_term_is_absent() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:hasValue "Alice" .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice", "Ali" .
+        ex:Bob a ex:Person ; ex:name "Bob" .
+        ex:Carol a ex:Person .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob,),
+        (EX.Carol,),
+    }
+
+
+def test_executes_node_shape_has_value_against_the_focus_node() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetNode ex:Alice, ex:Bob ;
+          sh:hasValue ex:Alice .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person .
+        ex:Bob a ex:Person .
+        """
+    )
+
+    assert "BIND (?focus_node AS ?value)" in compiled.query
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, EX.Bob),
+    }
+
+
+def test_compiles_in_as_sameterm_against_values() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:in ("Alice" "Carol") .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.InConstraintComponent
+    query = _normalized(compiled.query)
+    assert "SELECT DISTINCT ?focus_node ?value" in query
+    assert 'VALUES ?allowed { "Alice" "Carol" }' in query
+    assert "FILTER (sameTerm(?value, ?allowed))" in query
+
+
+def test_executes_in_and_returns_terms_outside_the_list() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:in ("Alice" "Carol") .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice" .
+        ex:Bob a ex:Person ; ex:name "Bob" .
+        ex:Dana a ex:Person ; ex:name ex:DanaName .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.name))),
+        (EX.Dana, EX.DanaName),
+    }
+
+
+def test_executes_empty_in_as_all_value_nodes() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:in () .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice" .
+        """
+    )
+
+    assert "VALUES ?allowed" not in compiled.query
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Alice, next(graph.objects(EX.Alice, EX.name))),
+    }
+
+
 def test_compile_shape_includes_direct_property_children() -> None:
     validator = SparqlValidator(
         _parse(
@@ -1188,12 +1313,12 @@ def test_compile_shape_unsupported_core_uses_public_error() -> None:
             """
             ex:PersonShape a sh:NodeShape ;
               sh:targetClass ex:Person ;
-              sh:in ("Alice") .
+              sh:equals ex:name .
             """
         )
     )
 
-    with pytest.raises(UnsupportedShapeError, match="InConstraintComponent"):
+    with pytest.raises(UnsupportedShapeError, match="EqualsConstraintComponent"):
         validator.compile_shape(EX.PersonShape)
 
 
