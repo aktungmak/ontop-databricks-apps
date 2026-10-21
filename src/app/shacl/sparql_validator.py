@@ -12,14 +12,17 @@ from .constraint_components import (
     ClassConstraintComponent,
     ConstraintComponent,
     DatatypeConstraintComponent,
+    LanguageInConstraintComponent,
     LessThanConstraintComponent,
     LessThanOrEqualsConstraintComponent,
     MaxCountConstraintComponent,
     MaxExclusiveConstraintComponent,
     MaxInclusiveConstraintComponent,
+    MaxLengthConstraintComponent,
     MinCountConstraintComponent,
     MinExclusiveConstraintComponent,
     MinInclusiveConstraintComponent,
+    MinLengthConstraintComponent,
     NodeKindConstraintComponent,
     PatternConstraintComponent,
     QualifiedMaxCountConstraintComponent,
@@ -207,7 +210,7 @@ class ConstraintValidator:
 
     def violations(
         self, ctx: ViolationContext, constraint: ConstraintComponent
-    ) -> SparqlViolationQuery:
+    ) -> SparqlViolationQuery | None:
         raise NotImplementedError
 
     def _query(
@@ -408,6 +411,83 @@ class MaxInclusiveValidator(ConstraintValidator):
         )
 
 
+def _length_violation_query(ctx: ViolationContext, operator: str, bound: int) -> str:
+    # SHACL §4.4.1–4.4.2: blank nodes never violate; STR() applies to IRI and literal.
+    return f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  {ctx.value_nodes_sparql}
+  FILTER (!isBlank(?value) && STRLEN(STR(?value)) {operator} {bound})
+}}"""
+
+
+@sparql_validator(MinLengthConstraintComponent)
+class MinLengthValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MinLengthConstraintComponent)
+        return self._query(
+            ctx, constraint, _length_violation_query(ctx, "<", constraint.minLength)
+        )
+
+
+@sparql_validator(MaxLengthConstraintComponent)
+class MaxLengthValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, MaxLengthConstraintComponent)
+        return self._query(
+            ctx, constraint, _length_violation_query(ctx, ">", constraint.maxLength)
+        )
+
+
+@sparql_validator(LanguageInConstraintComponent)
+class LanguageInValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, LanguageInConstraintComponent)
+        matches = " || ".join(
+            f"langMatches(lang(?value), {Literal(language).n3()})"
+            for language in constraint.languageIn
+        )
+        language_filter = (
+            f"FILTER (!isLiteral(?value) || !({matches}))"
+            if matches
+            else ""
+        )
+        query = f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  {ctx.value_nodes_sparql}
+  {language_filter}
+}}"""
+        return self._query(ctx, constraint, query)
+
+
+@sparql_validator(UniqueLangConstraintComponent)
+class UniqueLangValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery | None:
+        assert isinstance(constraint, UniqueLangConstraintComponent)
+        if not constraint.uniqueLang:
+            return None
+        assert ctx.path_sparql is not None
+        query = f"""SELECT DISTINCT ?focus_node
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  ?focus_node {ctx.path_sparql} ?value .
+  FILTER (isLiteral(?value) && lang(?value) != "")
+  ?focus_node {ctx.path_sparql} ?other_value .
+  FILTER (?value != ?other_value && isLiteral(?other_value)
+          && lang(?value) = lang(?other_value))
+}}"""
+        return self._query(ctx, constraint, query)
+
+
 class SparqlValidator:
     """Compile supported SHACL constraints to violation SELECTs."""
 
@@ -520,7 +600,9 @@ class SparqlValidator:
                     "Unsupported SHACL Core constraint "
                     f"{type(constraint).component_iri.n3()}"
                 )
-            queries.append(validator.violations(ctx, constraint))
+            compiled = validator.violations(ctx, constraint)
+            if compiled is not None:
+                queries.append(compiled)
 
         if isinstance(shape, PropertyShape):
             queries.extend(

@@ -300,7 +300,7 @@ def test_unsupported_constraint_aborts_compilation() -> None:
         ex:ManagerShape a sh:PropertyShape ;
           sh:targetClass ex:Person ;
           sh:path ex:manager ;
-          sh:minLength 1 .
+          sh:in ("ok") .
         """
     )
 
@@ -894,6 +894,194 @@ def test_executes_min_inclusive_incomparable_values_are_violations() -> None:
     }
 
 
+def test_compiles_min_and_max_length_filters() -> None:
+    min_len = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:minLength 3 .
+        """
+    )[0]
+    max_len = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:maxLength 8 .
+        """
+    )[0]
+
+    assert min_len.constraint_iri == SH.MinLengthConstraintComponent
+    assert max_len.constraint_iri == SH.MaxLengthConstraintComponent
+    assert "FILTER (!isBlank(?value) && STRLEN(STR(?value)) < 3)" in _normalized(
+        min_len.query
+    )
+    assert "FILTER (!isBlank(?value) && STRLEN(STR(?value)) > 8)" in _normalized(
+        max_len.query
+    )
+
+
+def test_executes_min_length_on_literals_iris_and_skips_blanks() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:minLength 4 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice" .
+        ex:Bob a ex:Person ; ex:name "Bo" .
+        ex:Carol a ex:Person ; ex:name ex:X .
+        ex:Dana a ex:Person ; ex:name _:blank .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.name))),
+    }
+
+
+def test_executes_max_length_on_literals() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:maxLength 3 .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Al" .
+        ex:Bob a ex:Person ; ex:name "Bob" .
+        ex:Carol a ex:Person ; ex:name "Carol" .
+        ex:Dana a ex:Person ; ex:name ex:X .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Carol, next(graph.objects(EX.Carol, EX.name))),
+        (EX.Dana, EX.X),
+    }
+
+
+def test_compiles_language_in_as_langmatches_disjunction() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:languageIn ("en" "de") .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.LanguageInConstraintComponent
+    query = _normalized(compiled.query)
+    assert 'langMatches(lang(?value), "en")' in query
+    assert 'langMatches(lang(?value), "de")' in query
+    assert "FILTER (!isLiteral(?value) || !(" in query
+
+
+def test_executes_language_in_rejects_unmatched_and_non_literals() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:languageIn ("en") .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:label "Hello"@en .
+        ex:Bob a ex:Person ; ex:label "Hallo"@de .
+        ex:Carol a ex:Person ; ex:label "plain" .
+        ex:Dana a ex:Person ; ex:label ex:NotALiteral .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.label))),
+        (EX.Carol, next(graph.objects(EX.Carol, EX.label))),
+        (EX.Dana, EX.NotALiteral),
+    }
+
+
+def test_executes_empty_language_in_as_all_value_nodes() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:languageIn () .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:label "Hello"@en .
+        """
+    )
+
+    assert "langMatches" not in compiled.query
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Alice, next(graph.objects(EX.Alice, EX.label))),
+    }
+
+
+def test_unique_lang_false_emits_no_query() -> None:
+    queries = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:uniqueLang false .
+        """
+    )
+
+    assert queries == []
+
+
+def test_compiles_unique_lang_as_language_self_join() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:uniqueLang true .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.UniqueLangConstraintComponent
+    query = _normalized(compiled.query)
+    assert "SELECT DISTINCT ?focus_node" in query
+    assert 'FILTER (isLiteral(?value) && lang(?value) != "")' in query
+    assert "lang(?value) = lang(?other_value)" in query
+
+
+def test_executes_unique_lang_on_duplicate_language_tags() -> None:
+    compiled = _compile(
+        """
+        ex:LabelShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:label ;
+          sh:uniqueLang true .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:label "Hello"@en, "Hi"@en, "Hallo"@de .
+        ex:Bob a ex:Person ; ex:label "Hello"@en, "Hallo"@de .
+        ex:Carol a ex:Person ; ex:label "plain", "also plain" .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {(EX.Alice,)}
+
+
 def test_compile_shape_includes_direct_property_children() -> None:
     validator = SparqlValidator(
         _parse(
@@ -1000,12 +1188,12 @@ def test_compile_shape_unsupported_core_uses_public_error() -> None:
             """
             ex:PersonShape a sh:NodeShape ;
               sh:targetClass ex:Person ;
-              sh:minLength 1 .
+              sh:in ("Alice") .
             """
         )
     )
 
-    with pytest.raises(UnsupportedShapeError, match="MinLengthConstraintComponent"):
+    with pytest.raises(UnsupportedShapeError, match="InConstraintComponent"):
         validator.compile_shape(EX.PersonShape)
 
 

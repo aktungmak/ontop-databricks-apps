@@ -108,11 +108,11 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `MinLengthValidator` | `sh:MinLengthConstraintComponent` | `sh:minLength` | Done | Not started |
-| `MaxLengthValidator` | `sh:MaxLengthConstraintComponent` | `sh:maxLength` | Done | Not started |
+| `MinLengthValidator` | `sh:MinLengthConstraintComponent` | `sh:minLength` | Done | Done (property and node shapes) |
+| `MaxLengthValidator` | `sh:MaxLengthConstraintComponent` | `sh:maxLength` | Done | Done (property and node shapes) |
 | `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`, optional `sh:flags` | Done | Done (property and node shapes) |
-| `LanguageInValidator` | `sh:LanguageInConstraintComponent` | `sh:languageIn` | Done | Not started |
-| `UniqueLangValidator` | `sh:UniqueLangConstraintComponent` | `sh:uniqueLang` (property shapes only) | Done | Not started |
+| `LanguageInValidator` | `sh:LanguageInConstraintComponent` | `sh:languageIn` | Done | Done (property and node shapes) |
+| `UniqueLangValidator` | `sh:UniqueLangConstraintComponent` | `sh:uniqueLang` (property shapes only) | Done | Done (`uniqueLang false` emits no query) |
 
 ### 4.5 Property pair
 
@@ -155,7 +155,7 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Not started |
 | `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Not started |
 
-**29 Core validators.** SPARQL is done for 10 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality remains property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
+**29 Core validators.** SPARQL is done for 14 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality and unique language remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
 
 `sh:targetClass` and `ClassValidator` emit direct `rdf:type` and rely on
 Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use
