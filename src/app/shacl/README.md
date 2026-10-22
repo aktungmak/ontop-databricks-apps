@@ -33,6 +33,7 @@ Compiler refusals are intentionally narrow:
 | User-supplied `sh:zeroOrMorePath`, `sh:oneOrMorePath`, or `sh:zeroOrOnePath` | Refuse | General arbitrary-length property paths are not supported by Ontop. Class and targetClass subclass closure is `rdf:type` plus Ontop TBox rewriting, not a property-path star. |
 | `sh:closed` | Refuse while unimplemented | A faithful generic implementation enumerates predicates with a fully unbound predicate pattern so the app rejects that VKG-wide scan. A future implementation needs a mapping-aware finite predicate set. |
 | `sh:target` and `sh:sparql` | Refuse while unimplemented | Only SHACL Core predicates are in scope so SHACL-SPARQL rejected. |
+| `sh:flags` | Refuse | Ontop's Spark/Databricks dialect maps 3-argument SPARQL `REGEX` to `REGEXP_LIKE3`, which is not implemented (`SparkSQLDBFunctionSymbolFactory.getDBRegexpMatches3`). Databricks/Spark regexp is 2-argument; XPath flags (`i`, `s`, `m`, `q`, …) cannot be expressed in SPARQL without that third argument or rewriting the user pattern, which this compiler does not do. Unflagged 2-argument `REGEX` is supported. An upstream Ontop dialect PR is expected. |
 | A parsed SHACL Core component without a registered validator | Refuse while unimplemented | Silently omitting a constraint would produce an unsound conformance result. |
 
 The following are **not** compiler anti-patterns: `OPTIONAL`, `UNION`,
@@ -68,7 +69,7 @@ runtime guidance, which is diagnostic rather than compiler policy.
 | Check that classes and predicates appear in the mapping | Not started |
 | App / MCP integration | Done for `validate_shacl(shapes_turtle, shape_iri)` |
 | Parse tests (`python3 -m pytest shacl/tests -m "not integration" -q` from `src/app`) | Done |
-| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes, supported complex paths, conforming results, pattern flags, node kinds, range comparability, and distinct cardinality (`make shacl-it-destroy` tears the instance down) |
+| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes, supported complex paths, conforming results, unflagged `sh:pattern`, node kinds, range comparability, and distinct cardinality (`make shacl-it-destroy` tears the instance down) |
 
 ## SPARQL validators (SHACL Core)
 
@@ -110,7 +111,7 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 | --- | --- | --- | --- | --- |
 | `MinLengthValidator` | `sh:MinLengthConstraintComponent` | `sh:minLength` | Done | Done (property and node shapes) |
 | `MaxLengthValidator` | `sh:MaxLengthConstraintComponent` | `sh:maxLength` | Done | Done (property and node shapes) |
-| `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`, optional `sh:flags` | Done | Done (property and node shapes) |
+| `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`; `sh:flags` refused | Done | Done for unflagged `sh:pattern` (property and node shapes; 2-arg `REGEX`). `sh:flags` raises `UnsupportedShapeError` (Spark `REGEXP_LIKE3` gap) |
 | `LanguageInValidator` | `sh:LanguageInConstraintComponent` | `sh:languageIn` | Done | Done (property and node shapes) |
 | `UniqueLangValidator` | `sh:UniqueLangConstraintComponent` | `sh:uniqueLang` (property shapes only) | Done | Done (`uniqueLang false` emits no query) |
 
@@ -120,10 +121,10 @@ Unless noted, a component applies to both node shapes and property shapes. Param
 
 | Validator | Component | Parameters | Parse | SPARQL |
 | --- | --- | --- | --- | --- |
-| `EqualsValidator` | `sh:EqualsConstraintComponent` | `sh:equals` (repeatable) | Done | Not started |
-| `DisjointValidator` | `sh:DisjointConstraintComponent` | `sh:disjoint` (repeatable) | Done | Not started |
-| `LessThanValidator` | `sh:LessThanConstraintComponent` | `sh:lessThan` (repeatable) | Done | Not started |
-| `LessThanOrEqualsValidator` | `sh:LessThanOrEqualsConstraintComponent` | `sh:lessThanOrEquals` (repeatable) | Done | Not started |
+| `EqualsValidator` | `sh:EqualsConstraintComponent` | `sh:equals` (repeatable) | Done | Done (property and node shapes; symmetric set difference) |
+| `DisjointValidator` | `sh:DisjointConstraintComponent` | `sh:disjoint` (repeatable) | Done | Done (property and node shapes) |
+| `LessThanValidator` | `sh:LessThanConstraintComponent` | `sh:lessThan` (repeatable) | Done | Done (property shapes only) |
+| `LessThanOrEqualsValidator` | `sh:LessThanOrEqualsConstraintComponent` | `sh:lessThanOrEquals` (repeatable) | Done | Done (property shapes only) |
 
 ### 4.6 Logical (compose nested shapes)
 
@@ -153,9 +154,9 @@ Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapes
 | --- | --- | --- | --- | --- |
 | `ClosedValidator` | `sh:ClosedConstraintComponent` | `sh:closed`, optional `sh:ignoredProperties` | Done | Not started |
 | `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Done (property shapes check existence; node shapes compare the focus node) |
-| `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Done (property and node shapes; empty list flags every value node) |
+| `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Done (property and node shapes; empty list flags every value node). Membership is RDF term identity via correlated `MINUS { VALUES ?value { … } }`, matching the spec SPARQL validator (`$in rdf:rest*/rdf:first $value`) without SPARQL `=` coercion |
 
-**29 Core validators.** SPARQL is done for 16 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`, `HasValue`, `In`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality and unique language remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
+**29 Core validators.** SPARQL is done for 20 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`, `HasValue`, `In`, `Equals`, `Disjoint`, `LessThan`, `LessThanOrEquals`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality, unique language, and ordered property pairs remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
 
 `sh:targetClass` and `ClassValidator` emit direct `rdf:type` and rely on
 Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use

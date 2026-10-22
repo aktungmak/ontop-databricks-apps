@@ -15,6 +15,7 @@ from shacl.sparql_validator import SparqlValidator
 EX = Namespace("http://example.org/tpch/")
 REGION_0 = EX["region/0"]
 NATION_0 = EX["nation/0"]
+NATION_2 = EX["nation/2"]
 SHACL_IT_ENDPOINT = os.environ.get("SHACL_IT_ENDPOINT")
 SHACL_IT_TOKEN = os.environ.get("SHACL_IT_TOKEN")
 
@@ -229,15 +230,6 @@ CASES = [
         expect_empty=True,
     ),
     ValidatorCase(
-        "pattern-case-insensitive-conforms",
-        "PropertyShape",
-        f"sh:targetNode {REGION_0.n3()}",
-        'sh:pattern "^africa$"; sh:flags "i"',
-        path="ex:name",
-        expect_empty=True,
-        query_contains=('"^africa$", "i"',),
-    ),
-    ValidatorCase(
         "pattern-case-sensitive-violates",
         "PropertyShape",
         f"sh:targetNode {REGION_0.n3()}",
@@ -338,7 +330,7 @@ CASES = [
         'sh:in ("EUROPE" "ASIA")',
         path="ex:name",
         expected=(ExpectedBinding(REGION_0, "AFRICA"),),
-        query_contains=("sameTerm(?value, ?allowed)",),
+        query_contains=('MINUS { VALUES ?value { "EUROPE" "ASIA" } }',),
     ),
     ValidatorCase(
         "in-conforms",
@@ -347,6 +339,74 @@ CASES = [
         'sh:in ("AFRICA" "EUROPE")',
         path="ex:name",
         expect_empty=True,
+        query_contains=('MINUS { VALUES ?value { "AFRICA" "EUROPE" } }',),
+    ),
+    ValidatorCase(
+        "equals",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:equals ex:comment",
+        path="ex:name",
+        expected=(ExpectedBinding(REGION_0, "AFRICA"),),
+        query_contains=("UNION",),
+    ),
+    ValidatorCase(
+        "equals-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:equals ex:name",
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "disjoint",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:disjoint ex:name",
+        path="ex:name",
+        expected=(ExpectedBinding(REGION_0, "AFRICA"),),
+    ),
+    ValidatorCase(
+        "disjoint-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:disjoint ex:comment",
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "less-than",
+        "PropertyShape",
+        f"sh:targetNode {NATION_0.n3()}",
+        "sh:lessThan ex:nationKey",
+        path="ex:regionKey",
+        expected=(ExpectedBinding(NATION_0, "0"),),
+        query_contains=("?value < ?other",),
+    ),
+    ValidatorCase(
+        "less-than-conforms",
+        "PropertyShape",
+        f"sh:targetNode {NATION_2.n3()}",
+        "sh:lessThan ex:nationKey",
+        path="ex:regionKey",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "less-than-or-equals-conforms",
+        "PropertyShape",
+        f"sh:targetNode {NATION_0.n3()}",
+        "sh:lessThanOrEquals ex:nationKey",
+        path="ex:regionKey",
+        expect_empty=True,
+        query_contains=("?value <= ?other",),
+    ),
+    ValidatorCase(
+        "less-than-or-equals",
+        "PropertyShape",
+        f"sh:targetNode {NATION_2.n3()}",
+        "sh:lessThanOrEquals ex:regionKey",
+        path="ex:nationKey",
+        expected=(ExpectedBinding(NATION_2, "2"),),
     ),
 ]
 

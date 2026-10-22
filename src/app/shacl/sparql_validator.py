@@ -12,6 +12,8 @@ from .constraint_components import (
     ClassConstraintComponent,
     ConstraintComponent,
     DatatypeConstraintComponent,
+    DisjointConstraintComponent,
+    EqualsConstraintComponent,
     HasValueConstraintComponent,
     InConstraintComponent,
     LanguageInConstraintComponent,
@@ -75,6 +77,7 @@ UNSUPPORTED_SHACL_INVENTORY = (
     "SPARQL-based constraints (sh:sparql)",
     "user-supplied repetition paths (sh:zeroOrMorePath/*, sh:oneOrMorePath/+, sh:zeroOrOnePath/?)",
     "sh:closed",
+    "sh:flags",
     "COUNT(DISTINCT ?value) on a TBox-expanded superclass (Ontop full-native reformulation crash: NativeNode cannot accept a visitor)",
 )
 
@@ -342,13 +345,18 @@ class PatternValidator(ConstraintValidator):
         self, ctx: ViolationContext, constraint: ConstraintComponent
     ) -> SparqlViolationQuery:
         assert isinstance(constraint, PatternConstraintComponent)
+        if constraint.flags is not None:
+            raise UnsupportedShapeError(
+                "sh:flags is not supported: Ontop's Spark/Databricks dialect maps "
+                "3-argument SPARQL REGEX to REGEXP_LIKE3, which is not implemented; "
+                "unflagged 2-argument REGEX remains supported"
+            )
         pattern = Literal(constraint.pattern).n3()
-        flags = f", {Literal(constraint.flags).n3()}" if constraint.flags else ""
         query = f"""SELECT DISTINCT ?focus_node ?value
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
   {ctx.value_nodes_sparql}
-  FILTER (!REGEX(STR(?value), {pattern}{flags}))
+  FILTER (!REGEX(STR(?value), {pattern}))
 }}"""
         return self._query(ctx, constraint, query)
 
@@ -514,14 +522,11 @@ WHERE {{
         return self._query(ctx, constraint, query)
 
 
-def _not_in_terms_filter(terms: list[Node]) -> str:
+def _minus_in_terms(terms: list[Node]) -> str:
     if not terms:
         return ""
     allowed = " ".join(term.n3() for term in terms)
-    return f"""FILTER NOT EXISTS {{
-    VALUES ?allowed {{ {allowed} }}
-    FILTER (sameTerm(?value, ?allowed))
-  }}"""
+    return f"MINUS {{ VALUES ?value {{ {allowed} }} }}"
 
 
 @sparql_validator(InConstraintComponent)
@@ -534,9 +539,108 @@ class InValidator(ConstraintValidator):
 WHERE {{
   {{ {ctx.focus_nodes_sparql} }}
   {ctx.value_nodes_sparql}
-  {_not_in_terms_filter(constraint.in_)}
+  {_minus_in_terms(constraint.in_)}
 }}"""
         return self._query(ctx, constraint, query)
+
+
+def _pair_property_iri(predicate: Node, param: str) -> str:
+    if not isinstance(predicate, URIRef):
+        raise IllFormedShapeError(f"{param} must be an IRI, got {predicate!r}")
+    return predicate.n3()
+
+
+@sparql_validator(EqualsConstraintComponent)
+class EqualsValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, EqualsConstraintComponent)
+        equals = _pair_property_iri(constraint.equals, "sh:equals")
+        focus = f"{{ {ctx.focus_nodes_sparql} }}"
+        if ctx.path_sparql is not None:
+            path_values = f"?focus_node {ctx.path_sparql} ?value ."
+            missing_from_path = f"FILTER NOT EXISTS {{ {path_values} }}"
+        else:
+            path_values = "BIND (?focus_node AS ?value)"
+            missing_from_path = "FILTER (!sameTerm(?value, ?focus_node))"
+        query = f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{
+    {focus}
+    {path_values}
+    FILTER NOT EXISTS {{ ?focus_node {equals} ?value . }}
+  }}
+  UNION
+  {{
+    {focus}
+    ?focus_node {equals} ?value .
+    {missing_from_path}
+  }}
+}}"""
+        return self._query(ctx, constraint, query)
+
+
+@sparql_validator(DisjointConstraintComponent)
+class DisjointValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, DisjointConstraintComponent)
+        disjoint = _pair_property_iri(constraint.disjoint, "sh:disjoint")
+        query = f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  {ctx.value_nodes_sparql}
+  ?focus_node {disjoint} ?value .
+}}"""
+        return self._query(ctx, constraint, query)
+
+
+def _pair_order_violation_query(
+    ctx: ViolationContext, predicate: Node, param: str, operator: str
+) -> str:
+    assert ctx.path_sparql is not None
+    other = _pair_property_iri(predicate, param)
+    comparable = (
+        "((isNumeric(?value) && isNumeric(?other)) "
+        "|| (datatype(?value) = datatype(?other)))"
+    )
+    return f"""SELECT DISTINCT ?focus_node ?value
+WHERE {{
+  {{ {ctx.focus_nodes_sparql} }}
+  ?focus_node {ctx.path_sparql} ?value .
+  ?focus_node {other} ?other .
+  FILTER (!COALESCE({comparable} && (?value {operator} ?other), false))
+}}"""
+
+
+@sparql_validator(LessThanConstraintComponent)
+class LessThanValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, LessThanConstraintComponent)
+        return self._query(
+            ctx,
+            constraint,
+            _pair_order_violation_query(ctx, constraint.lessThan, "sh:lessThan", "<"),
+        )
+
+
+@sparql_validator(LessThanOrEqualsConstraintComponent)
+class LessThanOrEqualsValidator(ConstraintValidator):
+    def violations(
+        self, ctx: ViolationContext, constraint: ConstraintComponent
+    ) -> SparqlViolationQuery:
+        assert isinstance(constraint, LessThanOrEqualsConstraintComponent)
+        return self._query(
+            ctx,
+            constraint,
+            _pair_order_violation_query(
+                ctx, constraint.lessThanOrEquals, "sh:lessThanOrEquals", "<="
+            ),
+        )
 
 
 class SparqlValidator:

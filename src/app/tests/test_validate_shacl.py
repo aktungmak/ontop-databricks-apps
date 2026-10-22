@@ -221,9 +221,9 @@ def test_missing_token_maps_401() -> None:
     ("shapes", "shape", "message"),
     [
         (
-            SHAPES.replace("sh:minCount 1", "sh:equals ex:name"),
+            SHAPES.replace("sh:minCount 1", "sh:not ex:OtherShape"),
             "http://example.org/PersonShape",
-            "EqualsConstraintComponent",
+            "NotConstraintComponent",
         ),
         ("not valid turtle", "http://example.org/PersonShape", "Invalid Turtle"),
         (SHAPES, "http://example.org/MissingShape", "was not found"),

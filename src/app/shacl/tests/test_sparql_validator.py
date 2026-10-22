@@ -125,14 +125,28 @@ def test_compiles_datatype_with_target_subjects_of() -> None:
     ) in query
 
 
-def test_compiles_pattern_flags_and_target_objects_of_with_result_metadata() -> None:
+def test_pattern_flags_raise_unsupported_shape_error() -> None:
+    with pytest.raises(UnsupportedShapeError, match=r"sh:flags is not supported"):
+        _compile(
+            """
+            ex:CodeShape a sh:PropertyShape ;
+              sh:targetObjectsOf ex:hasMember ;
+              sh:path ex:code ;
+              sh:pattern "^[a-z]+$" ;
+              sh:flags "i" ;
+              sh:message "Code must contain letters only" ;
+              sh:severity sh:Warning .
+            """
+        )
+
+
+def test_compiles_unflagged_pattern_as_two_arg_regex() -> None:
     compiled = _compile(
         """
         ex:CodeShape a sh:PropertyShape ;
           sh:targetObjectsOf ex:hasMember ;
           sh:path ex:code ;
           sh:pattern "^[a-z]+$" ;
-          sh:flags "i" ;
           sh:message "Code must contain letters only" ;
           sh:severity sh:Warning .
         """
@@ -144,7 +158,8 @@ def test_compiles_pattern_flags_and_target_objects_of_with_result_metadata() -> 
     assert compiled.severity == SH.Warning
     query = _normalized(compiled.query)
     assert "?any <http://example.org/shacl-test/hasMember> ?focus_node ." in query
-    assert 'FILTER (!REGEX(STR(?value), "^[a-z]+$", "i"))' in query
+    assert 'FILTER (!REGEX(STR(?value), "^[a-z]+$"))' in query
+    assert ", " not in query.split("REGEX(")[1].split(")")[0]
 
 
 def test_deactivated_property_shape_compiles_no_queries() -> None:
@@ -300,7 +315,7 @@ def test_unsupported_constraint_aborts_compilation() -> None:
         ex:ManagerShape a sh:PropertyShape ;
           sh:targetClass ex:Person ;
           sh:path ex:manager ;
-          sh:equals ex:manager .
+          sh:not ex:OtherShape .
         """
     )
 
@@ -1146,7 +1161,7 @@ def test_executes_node_shape_has_value_against_the_focus_node() -> None:
     }
 
 
-def test_compiles_in_as_sameterm_against_values() -> None:
+def test_compiles_in_as_minus_values_on_value() -> None:
     compiled = _compile(
         """
         ex:NameShape a sh:PropertyShape ;
@@ -1159,8 +1174,9 @@ def test_compiles_in_as_sameterm_against_values() -> None:
     assert compiled.constraint_iri == SH.InConstraintComponent
     query = _normalized(compiled.query)
     assert "SELECT DISTINCT ?focus_node ?value" in query
-    assert 'VALUES ?allowed { "Alice" "Carol" }' in query
-    assert "FILTER (sameTerm(?value, ?allowed))" in query
+    assert 'MINUS { VALUES ?value { "Alice" "Carol" } }' in query
+    assert "sameTerm" not in query
+    assert "NOT EXISTS" not in query
 
 
 def test_executes_in_and_returns_terms_outside_the_list() -> None:
@@ -1202,8 +1218,185 @@ def test_executes_empty_in_as_all_value_nodes() -> None:
     )
 
     assert "VALUES ?allowed" not in compiled.query
+    assert "MINUS" not in compiled.query
+    assert "VALUES ?value" not in compiled.query
     assert {tuple(row) for row in graph.query(compiled.query)} == {
         (EX.Alice, next(graph.objects(EX.Alice, EX.name))),
+    }
+
+
+def test_compiles_equals_as_symmetric_set_difference() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:equals ex:label .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.EqualsConstraintComponent
+    query = _normalized(compiled.query)
+    assert "UNION" in query
+    assert (
+        "FILTER NOT EXISTS { ?focus_node <http://example.org/shacl-test/label> ?value . }"
+        in query
+    )
+    assert (
+        "FILTER NOT EXISTS { ?focus_node <http://example.org/shacl-test/name> ?value . }"
+        in query
+    )
+
+
+def test_executes_equals_for_values_missing_on_either_side() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:equals ex:label .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice" ; ex:label "Alice" .
+        ex:Bob a ex:Person ; ex:name "Bob" ; ex:label "Robert" .
+        ex:Carol a ex:Person ; ex:name "Carol" .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.name))),
+        (EX.Bob, next(graph.objects(EX.Bob, EX.label))),
+        (EX.Carol, next(graph.objects(EX.Carol, EX.name))),
+    }
+
+
+def test_executes_node_shape_equals_against_the_paired_property() -> None:
+    compiled = _compile(
+        """
+        ex:PersonShape a sh:NodeShape ;
+          sh:targetNode ex:Alice, ex:Bob ;
+          sh:equals ex:sameAs .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice ex:sameAs ex:Alice .
+        ex:Bob ex:sameAs ex:Other .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, EX.Bob),
+        (EX.Bob, EX.Other),
+    }
+
+
+def test_compiles_disjoint_as_join_on_the_paired_property() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:disjoint ex:label .
+        """
+    )[0]
+
+    assert compiled.constraint_iri == SH.DisjointConstraintComponent
+    assert (
+        "?focus_node <http://example.org/shacl-test/label> ?value ."
+        in _normalized(compiled.query)
+    )
+
+
+def test_executes_disjoint_when_value_sets_overlap() -> None:
+    compiled = _compile(
+        """
+        ex:NameShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:name ;
+          sh:disjoint ex:label .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:name "Alice" ; ex:label "Ali" .
+        ex:Bob a ex:Person ; ex:name "Bob" ; ex:label "Bob" .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.name))),
+    }
+
+
+def test_compiles_less_than_and_less_than_or_equals_filters() -> None:
+    less = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:lessThan ex:maxAge .
+        """
+    )[0]
+    less_eq = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:lessThanOrEquals ex:maxAge .
+        """
+    )[0]
+
+    assert less.constraint_iri == SH.LessThanConstraintComponent
+    assert less_eq.constraint_iri == SH.LessThanOrEqualsConstraintComponent
+    assert "?value < ?other" in _normalized(less.query)
+    assert "?value <= ?other" in _normalized(less_eq.query)
+    assert "FILTER (!COALESCE(" in _normalized(less.query)
+
+
+def test_executes_less_than_including_incomparable_values() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:lessThan ex:maxAge .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 1 ; ex:maxAge 2 .
+        ex:Bob a ex:Person ; ex:age 2 ; ex:maxAge 2 .
+        ex:Carol a ex:Person ; ex:age 1 ; ex:maxAge "old" .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
+        (EX.Carol, next(graph.objects(EX.Carol, EX.age))),
+    }
+
+
+def test_executes_less_than_or_equals_on_integers() -> None:
+    compiled = _compile(
+        """
+        ex:AgeShape a sh:PropertyShape ;
+          sh:targetClass ex:Person ;
+          sh:path ex:age ;
+          sh:lessThanOrEquals ex:maxAge .
+        """
+    )[0]
+    graph = _data(
+        """
+        ex:Alice a ex:Person ; ex:age 2 ; ex:maxAge 2 .
+        ex:Bob a ex:Person ; ex:age 3 ; ex:maxAge 2 .
+        """
+    )
+
+    assert {tuple(row) for row in graph.query(compiled.query)} == {
+        (EX.Bob, next(graph.objects(EX.Bob, EX.age))),
     }
 
 
@@ -1313,12 +1506,12 @@ def test_compile_shape_unsupported_core_uses_public_error() -> None:
             """
             ex:PersonShape a sh:NodeShape ;
               sh:targetClass ex:Person ;
-              sh:equals ex:name .
+              sh:not ex:OtherShape .
             """
         )
     )
 
-    with pytest.raises(UnsupportedShapeError, match="EqualsConstraintComponent"):
+    with pytest.raises(UnsupportedShapeError, match="NotConstraintComponent"):
         validator.compile_shape(EX.PersonShape)
 
 
