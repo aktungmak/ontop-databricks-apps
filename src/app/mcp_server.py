@@ -10,6 +10,8 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 
+from actions.models import ConfirmActionRequest, PrepareActionRequest
+from actions.service import ActionError, ActionService
 from config import Settings
 from obo import MISSING_USER_TOKEN, token_from_headers
 from ontology_store import OntologyStore
@@ -63,6 +65,7 @@ class McpRuntime:
     ontop_manager: OntopProcessManager
     settings: Settings
     http_client: httpx.AsyncClient
+    action_service: ActionService | None = None
 
 
 _runtime: McpRuntime | None = None
@@ -183,3 +186,74 @@ async def execute_sparql(query: str) -> dict[str, Any]:
         raise ToolError(f"({result.status_code}): {result.message}")
 
     return result.data
+
+
+@mcp.tool
+def list_actions(
+    class_iri: str | None = None,
+    subject_iri: str | None = None,
+    property_iri: str | None = None,
+    kind: str | None = None,
+) -> dict[str, Any]:
+    """List the action catalog and writable VKG properties."""
+    runtime = _require_runtime()
+    if runtime.action_service is None:
+        return {"available": False, "actions": [], "properties": []}
+    return runtime.action_service.list_actions(
+        class_iri=class_iri,
+        subject_iri=subject_iri,
+        property_iri=property_iri,
+        kind=kind,
+    )
+
+
+@mcp.tool
+def describe_action(action_iri: str) -> dict[str, Any] | None:
+    """Describe one action from the active VKG action catalog."""
+    runtime = _require_runtime()
+    if runtime.action_service is None:
+        return None
+    return runtime.action_service.describe_action(action_iri)
+
+
+@mcp.tool
+async def prepare_action(
+    action_iri: str,
+    subject_iri: str,
+    params: dict[str, Any],
+    idempotency_key: str | None = None,
+) -> dict[str, Any] | str:
+    """Prepare an action under the MCP caller's forwarded Databricks token."""
+    runtime = _require_runtime()
+    try:
+        token = get_mcp_user_token()
+        if runtime.action_service is None:
+            return "Error (503): action service is unavailable"
+        result = await runtime.action_service.prepare(
+            PrepareActionRequest(
+                action_iri=action_iri,
+                subject_iri=subject_iri,
+                params=params,
+                idempotency_key=idempotency_key,
+            ),
+            token,
+        )
+    except (McpAuthError, ActionError) as error:
+        return f"Error ({error.status_code}): {error.message}"
+    return result.model_dump() if hasattr(result, "model_dump") else result
+
+
+@mcp.tool
+async def confirm_action(preparation_token: str) -> dict[str, Any] | str:
+    """Confirm a prepared action under the MCP caller's forwarded token."""
+    runtime = _require_runtime()
+    try:
+        token = get_mcp_user_token()
+        if runtime.action_service is None:
+            return "Error (503): action service is unavailable"
+        result = await runtime.action_service.confirm(
+            ConfirmActionRequest(preparation_token=preparation_token), token
+        )
+    except (McpAuthError, ActionError) as error:
+        return f"Error ({error.status_code}): {error.message}"
+    return result.model_dump() if hasattr(result, "model_dump") else result

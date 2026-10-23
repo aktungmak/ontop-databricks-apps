@@ -32,6 +32,15 @@ variables:
     default: mapping.ttl
   ontology_file:
     default: ontology.ttl
+  actions_file:
+    description: Action catalog file in the mappings volume; absent keeps the app read-only
+    default: actions.ttl
+  action_audit_table:
+    description: Three-part UC table for action audit rows; required when an action catalog is present
+    default: ""
+  action_prepare_ttl_seconds:
+    description: Lifetime of a prepared action token in seconds
+    default: "600"
 
 targets:
   volume:
@@ -115,6 +124,12 @@ targets:
                 value: ${var.mapping_file}
               - name: VKG_ONTOLOGY_FILE
                 value: ${var.ontology_file}
+              - name: VKG_ACTIONS_FILE
+                value: ${var.actions_file}
+              - name: VKG_ACTION_AUDIT_TABLE
+                value: ${var.action_audit_table}
+              - name: VKG_ACTION_PREPARE_TTL_SECONDS
+                value: ${var.action_prepare_ttl_seconds}
               - name: ONTOP_INTERNAL_PORT
                 value: "18080"
               - name: FM_MODEL_NAME

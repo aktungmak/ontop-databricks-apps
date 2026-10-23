@@ -18,6 +18,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastmcp.utilities.lifespan import combine_lifespans
 
+from actions.audit import ActionAuditLogger
+from actions.catalog import ActionCatalog
+from actions.routes import create_action_router
+from actions.service import ActionService
+from actions.subjects import VkgSubjectChecker
+from actions.tokens import PrepareTokenSigner
 from config import Settings
 from mcp_server import McpRuntime, configure as configure_mcp, mcp
 from obo import get_user_token
@@ -77,6 +83,42 @@ async def ontop_lifespan(app: FastAPI):
         ontop_manager.ontology_path,
     )
 
+    action_catalog = ActionCatalog.load(
+        actions_path=ontop_manager.actions_path,
+        ontology_path=ontop_manager.ontology_path,
+        mapping_path=ontop_manager.mapping_path,
+    )
+    app.state.action_catalog = action_catalog
+
+    async def check_action_subject(
+        subject_iri: str,
+        class_iri: str,
+        token: str,
+        timeout_seconds: int,
+    ) -> bool:
+        checker = VkgSubjectChecker(
+            settings=settings,
+            http_client=app.state.http_client,
+            ontop_manager=ontop_manager,
+        )
+        return await checker(subject_iri, class_iri, token, timeout_seconds)
+
+    if action_catalog.available:
+        app.state.action_service = ActionService(
+            catalog=action_catalog,
+            settings=settings,
+            audit_logger=ActionAuditLogger(settings),
+            token_signer=PrepareTokenSigner.from_settings(settings),
+            subject_checker=check_action_subject,
+        )
+    else:
+        app.state.action_service = ActionService(
+            catalog=action_catalog,
+            settings=settings,
+            audit_recorder=lambda _row, _token, _effective_user, _timeout: "",
+            token_signer=PrepareTokenSigner("actions-unavailable"),
+        )
+
     ontop_manager.start()
     http_client = httpx.AsyncClient(timeout=120.0)
     app.state.http_client = http_client
@@ -87,6 +129,7 @@ async def ontop_lifespan(app: FastAPI):
             ontop_manager=ontop_manager,
             settings=settings,
             http_client=http_client,
+            action_service=app.state.action_service,
         )
     )
     logger.info("App initialisation complete")
@@ -107,6 +150,7 @@ app.include_router(uc_router, prefix="/api/uc", tags=["uc"])
 app.include_router(
     autogenerate_router, prefix="/api/autogenerate", tags=["autogenerate"]
 )
+app.include_router(create_action_router(), prefix="/api/actions", tags=["actions"])
 
 
 @app.get("/")
@@ -166,6 +210,8 @@ async def health(request: Request) -> Response:
         "ontology_loaded": ontology,
         "reformulate_responsive": reformulate_responsive,
         "reformulate_status": reformulate_status,
+        "actions_loaded": request.app.state.action_catalog.available,
+        "action_count": len(request.app.state.action_catalog.actions),
     }
     if detail:
         payload["detail"] = detail
