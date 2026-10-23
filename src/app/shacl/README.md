@@ -69,7 +69,7 @@ runtime guidance, which is diagnostic rather than compiler policy.
 | Check that classes and predicates appear in the mapping | Not started |
 | App / MCP integration | Done for `validate_shacl(shapes_turtle, shape_iri)` |
 | Parse tests (`python3 -m pytest shacl/tests -m "not integration" -q` from `src/app`) | Done |
-| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes, supported complex paths, conforming results, unflagged `sh:pattern`, node kinds, range comparability, and distinct cardinality (`make shacl-it-destroy` tears the instance down) |
+| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes (including node-shape leaf constraints via `BIND (?focus_node AS ?value)`), nested `sh:property` via `compile_shape` (the MCP path), supported complex paths, conforming results, unflagged `sh:pattern`, node kinds, range comparability, and distinct cardinality. The single known-failing live case (TBox-expanded `COUNT(DISTINCT ?value)`) is `xfail`'d, `strict=True` (`make shacl-it-destroy` tears the instance down) |
 
 ## SPARQL validators (SHACL Core)
 
@@ -165,7 +165,13 @@ multiplicity. Ontop full-native reformulation currently crashes
 (`NativeNode cannot accept a visitor`) when this aggregate is applied to a
 TBox-expanded superclass such as `ex:GeographicArea`; that runtime failure is
 listed in `UNSUPPORTED_SHACL_INVENTORY` (the compiler still emits the query).
-The valid live subclass-closure/minCount case remains as a failing regression
-test while a scalable reformulation is designed.
+The live subclass-closure/minCount case (`target-class-subclass-closure` in
+`test_shacl_ontop.py`) is `pytest.mark.xfail(..., strict=True)`'d — the
+compiler still emits the query and the compile-time `query_contains`
+assertion for the direct `rdf:type ex:GeographicArea` pattern still runs, but
+the live HTTP/execution assertion is expected to fail until the upstream
+Ontop reformulation fix is released. `strict=True` means the case starts
+failing the suite again (XPASS) the moment Ontop begins returning HTTP 200
+with the expected bindings, as a prompt to remove the mark.
 
 `ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.

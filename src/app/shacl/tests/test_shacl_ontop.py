@@ -42,14 +42,32 @@ class ExpectedBinding:
 
 @dataclass(frozen=True)
 class ValidatorCase:
+    """A live-Ontop case, compiled one of two ways.
+
+    Most cases keep the original single-shape template: set ``shape_kind``,
+    ``target``, and ``constraint`` (optionally ``path``) and the shape is
+    compiled via ``SparqlValidator.validate()``, asserting exactly one query
+    (unchanged behavior).
+
+    Cases that need nested ``sh:property`` or the ``compile_shape`` (MCP)
+    path instead supply ``shapes_turtle`` — a full shapes Turtle snippet
+    (prefixes from ``_PREFIXES`` are added automatically) — and
+    ``compile_shape_iri``, the IRI of the named node shape to compile. If
+    that compiles to more than one query, set ``select_query_contains`` to a
+    fragment unique to the query that should be executed.
+    """
+
     name: str
-    shape_kind: str
-    target: str
-    constraint: str
+    shape_kind: str | None = None
+    target: str | None = None
+    constraint: str | None = None
     path: str | None = None
     expected: tuple[ExpectedBinding, ...] = ()
     expect_empty: bool = False
     query_contains: tuple[str, ...] = ()
+    shapes_turtle: str | None = None
+    compile_shape_iri: URIRef | None = None
+    select_query_contains: str | None = None
 
 
 CASES = [
@@ -141,20 +159,37 @@ CASES = [
         path="ex:name",
         expected=(ExpectedBinding(REGION_0),),
     ),
-    ValidatorCase(
-        "target-class-subclass-closure",
-        "PropertyShape",
-        "sh:targetClass ex:GeographicArea",
-        "sh:minCount 2",
-        path="ex:name",
-        expected=(
-            ExpectedBinding(REGION_0),
-            ExpectedBinding(NATION_0),
+    pytest.param(
+        ValidatorCase(
+            "target-class-subclass-closure",
+            "PropertyShape",
+            "sh:targetClass ex:GeographicArea",
+            "sh:minCount 2",
+            path="ex:name",
+            expected=(
+                ExpectedBinding(REGION_0),
+                ExpectedBinding(NATION_0),
+            ),
+            query_contains=(
+                "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+                "<http://example.org/tpch/GeographicArea>",
+            ),
         ),
-        query_contains=(
-            "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
-            "<http://example.org/tpch/GeographicArea>",
+        marks=pytest.mark.xfail(
+            reason=(
+                "Ontop full-native reformulation crashes (NativeNode cannot "
+                "accept a visitor) when COUNT(DISTINCT ?value) is applied to "
+                "a TBox-expanded superclass such as ex:GeographicArea. The "
+                "compiler still emits the query (direct rdf:type "
+                "GeographicArea; subclass closure is Ontop TBox rewriting) "
+                "and the compile-time assertions above still run; only the "
+                "live HTTP/execution assertion is expected to fail. See "
+                "UNSUPPORTED_SHACL_INVENTORY. Remove once the upstream Ontop "
+                "fix is released."
+            ),
+            strict=True,
         ),
+        id="target-class-subclass-closure",
     ),
     ValidatorCase(
         "target-subjects-of",
@@ -297,6 +332,12 @@ CASES = [
         expected=(ExpectedBinding(REGION_0, "AFRICA"),),
         query_contains=('langMatches(lang(?value), "en")',),
     ),
+    # No uniqueLang *violation* case: TPC-H names/comments are plain literals
+    # without language tags (lang(?value) == ""), so the duplicate-language
+    # self-join this validator emits can never match and uniqueLang cannot
+    # fire against this dataset. The conforms case below is the only live
+    # coverage; a violation would require literals with repeated language
+    # tags, which this mapping does not produce.
     ValidatorCase(
         "unique-lang-conforms",
         "PropertyShape",
@@ -408,24 +449,240 @@ CASES = [
         path="ex:nationKey",
         expected=(ExpectedBinding(NATION_2, "2"),),
     ),
+    # -- Property-shape conform counterparts -------------------------------
+    # Several property-shape validators above only exercise the violate
+    # path; these add the cheap conforming counterpart against the same
+    # live data.
+    ValidatorCase(
+        "datatype-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:datatype xsd:string",
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "pattern-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        'sh:pattern "^AFRICA$"',
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "min-exclusive-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:minExclusive -1",
+        path="ex:regionKey",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "max-inclusive-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:maxInclusive 0",
+        path="ex:regionKey",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "max-length-conforms",
+        "PropertyShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:maxLength 6",
+        path="ex:name",
+        expect_empty=True,
+    ),
+    ValidatorCase(
+        "class-inregion-conforms",
+        "PropertyShape",
+        f"sh:targetNode {NATION_0.n3()}",
+        "sh:class ex:Region",
+        path="ex:inRegion",
+        expect_empty=True,
+    ),
+    # -- Node-shape leaf constraints (BIND focus as value) ------------------
+    # `node-shape-focus-value` (sh:class ex:Nation) above is the only
+    # existing node-shape leaf case; these round out BIND (?focus_node AS
+    # ?value) coverage for other validators against REGION_0/NATION_0.
+    ValidatorCase(
+        "node-shape-nodekind-iri-conforms",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:nodeKind sh:IRI",
+        expect_empty=True,
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-nodekind-literal-violates",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:nodeKind sh:Literal",
+        expected=(ExpectedBinding(REGION_0, REGION_0),),
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-has-value-conforms",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        f"sh:hasValue {REGION_0.n3()}",
+        expect_empty=True,
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-has-value-violates",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        f"sh:hasValue {NATION_0.n3()}",
+        # Node-shape sh:hasValue compares the focus node itself, so the
+        # violation's value binding is the focus (matching the existing
+        # property-shape has-value binding behavior: see `has-value` above
+        # and the unit tests), not the (absent) expected hasValue term.
+        expected=(ExpectedBinding(REGION_0, REGION_0),),
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-in-violates",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        f"sh:in ({NATION_0.n3()})",
+        expected=(ExpectedBinding(REGION_0, REGION_0),),
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-in-conforms",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        f"sh:in ({REGION_0.n3()} {NATION_0.n3()})",
+        expect_empty=True,
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-class-region-conforms",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:class ex:Region",
+        expect_empty=True,
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-datatype-violates",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        "sh:datatype xsd:string",
+        expected=(ExpectedBinding(REGION_0, REGION_0),),
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    ValidatorCase(
+        "node-shape-pattern-iri-conforms",
+        "NodeShape",
+        f"sh:targetNode {REGION_0.n3()}",
+        # STR() of the focus IRI contains "region/0"; stable because it is
+        # the mapping's rr:template, not a value sensitive to row content.
+        'sh:pattern "region/0"',
+        expect_empty=True,
+        query_contains=("BIND (?focus_node AS ?value)",),
+    ),
+    # -- Nested sh:property (compile_shape; the MCP compile path) -----------
+    # A nested sh:property must rebind the inner shape's focus to the
+    # *parent's value nodes* (?parent_focus_N <path> ?focus_node), not
+    # inherit the outer NodeShape's sh:targetNode onto the inner path. If
+    # that rebinding were wrong, ex:name would be read directly off
+    # NATION_0 ("ALGERIA") instead of off its ex:inRegion value REGION_0
+    # ("AFRICA").
+    ValidatorCase(
+        "nested-property-violates",
+        shapes_turtle=f"""
+ex:NestedRegionNameViolatesShape a sh:NodeShape ;
+  sh:targetNode {NATION_0.n3()} ;
+  sh:property [
+    sh:path ex:inRegion ;
+    sh:property [
+      sh:path ex:name ;
+      sh:pattern "^EUROPE$"
+    ]
+  ] .
+""",
+        compile_shape_iri=EX["NestedRegionNameViolatesShape"],
+        expected=(ExpectedBinding(REGION_0, "AFRICA"),),
+        query_contains=(
+            "?parent_focus_1 <http://example.org/tpch/inRegion> ?focus_node",
+        ),
+    ),
+    ValidatorCase(
+        "nested-property-conforms",
+        shapes_turtle=f"""
+ex:NestedRegionNameConformsShape a sh:NodeShape ;
+  sh:targetNode {NATION_0.n3()} ;
+  sh:property [
+    sh:path ex:inRegion ;
+    sh:property [
+      sh:path ex:name ;
+      sh:datatype xsd:string
+    ]
+  ] .
+""",
+        compile_shape_iri=EX["NestedRegionNameConformsShape"],
+        expect_empty=True,
+        query_contains=(
+            "?parent_focus_1 <http://example.org/tpch/inRegion> ?focus_node",
+        ),
+    ),
 ]
 
 
-def _compile(case: ValidatorCase):
+def _shapes_turtle(case: ValidatorCase) -> str:
+    if case.shapes_turtle is not None:
+        return _PREFIXES + case.shapes_turtle
+    assert (
+        case.shape_kind is not None
+        and case.target is not None
+        and case.constraint is not None
+    ), (
+        f"{case.name}: must supply either shapes_turtle or "
+        "shape_kind/target/constraint"
+    )
     path = f"\n  sh:path {case.path} ;" if case.path is not None else ""
-    shapes_turtle = _PREFIXES + f"""
+    return _PREFIXES + f"""
 ex:IntegrationShape a sh:{case.shape_kind} ;
   {case.target} ;{path}
   {case.constraint} .
 """
-    graph = Graph()
-    graph.parse(data=shapes_turtle, format="turtle")
-    queries = SparqlValidator(ShapesGraph.from_graph(graph)).validate()
+
+
+def _select_query(
+    case: ValidatorCase,
+    queries: list,
+    shapes_turtle: str,
+):
+    if case.select_query_contains is not None:
+        matches = [q for q in queries if case.select_query_contains in q.query]
+        assert len(matches) == 1, (
+            f"{case.name}: expected exactly one compiled query containing "
+            f"{case.select_query_contains!r}, got {len(matches)} of "
+            f"{len(queries)}\nshape:\n{shapes_turtle}"
+        )
+        return matches[0]
     assert len(queries) == 1, (
         f"{case.name}: expected one query, got {len(queries)}\n"
         f"shape:\n{shapes_turtle}"
     )
-    return shapes_turtle, queries[0]
+    return queries[0]
+
+
+def _compile(case: ValidatorCase):
+    shapes_turtle = _shapes_turtle(case)
+    graph = Graph()
+    graph.parse(data=shapes_turtle, format="turtle")
+    validator = SparqlValidator(ShapesGraph.from_graph(graph))
+    if case.compile_shape_iri is not None:
+        # The MCP (`validate_shacl`) compile path: a named node shape plus
+        # its (possibly nested) sh:property children.
+        queries = validator.compile_shape(case.compile_shape_iri).queries
+    else:
+        queries = validator.validate()
+    compiled = _select_query(case, queries, shapes_turtle)
+    return shapes_turtle, compiled
 
 
 def _diagnostics(
