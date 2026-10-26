@@ -28,6 +28,10 @@ _NATIVE_LINE = re.compile(
     r"^\s*NATIVE\s*\[[^\]]*\]\s*$",
     re.MULTILINE | re.IGNORECASE,
 )
+# EmptyNodeImpl.toString() is "EMPTY " + projectedVariables, e.g. "EMPTY [focus_node, value]".
+# Native generation dumps the IQ root as "IQ: " + tree; an empty root is an empty SPARQL result.
+_EMPTY_NODE = re.compile(r"EMPTY\s*\[([^\]]*)\]")
+_EMPTY_IQ_ROOT = re.compile(r"IQ:\s*EMPTY\s*\[([^\]]*)\]")
 _CONSTRUCT_TYPES = re.compile(
     r"CONSTRUCT\s*\[[^\]]*\]\s*\[([^\]]+)\]",
     re.IGNORECASE,
@@ -67,6 +71,39 @@ def extract_native_sql(reformulate_output: str) -> str:
     if match:
         return text[match.end() :].lstrip("\n").strip() or text
     return text
+
+
+def _vars_from_empty_iq(bracket_contents: str) -> list[str]:
+    return [part.strip() for part in bracket_contents.split(",") if part.strip()]
+
+
+def empty_sparql_json_from_ontop_error(message: str) -> dict | None:
+    """Map Ontop's empty-IQ native-reformulation failure to empty SPARQL JSON.
+
+    Key off EmptyNode's dump as the IQ root (``IQ: EMPTY [vars]``), not the
+    wrapping English exception phrase. A non-empty root such as ``IQ: UNION``
+    is a real native-translation failure even if an EMPTY child appears later.
+    """
+    match = _EMPTY_IQ_ROOT.search(message)
+    if not match:
+        return None
+    return to_sparql_json(_vars_from_empty_iq(match.group(1)), [])
+
+
+def empty_sparql_json_from_reformulate_output(text: str) -> dict | None:
+    """Map a successful reformulate IQ tree that bottoms out at EMPTY to no rows.
+
+    Occurs when Ontop returns the optimized tree without a NATIVE SQL node.
+    """
+    if _NATIVE_LINE.search(text):
+        return None
+    matches = list(_EMPTY_NODE.finditer(text))
+    if len(matches) != 1:
+        return None
+    upper = text.upper()
+    if "SELECT" in upper and "FROM" in upper:
+        return None
+    return to_sparql_json(_vars_from_empty_iq(matches[0].group(1)), [])
 
 
 def format_ontop_error(body: str, status_code: int) -> str:
@@ -263,6 +300,12 @@ async def execute_sparql_query(
 
     if upstream.status_code >= 400:
         detail = format_ontop_error(upstream.text, upstream.status_code)
+        empty = empty_sparql_json_from_ontop_error(detail)
+        if empty is not None:
+            logger.info(
+                "Ontop proved SPARQL empty (native EMPTY IQ); returning no rows"
+            )
+            return SparqlExecuteSuccess(data=empty)
         logger.error(
             "Ontop returned %s for POST %s: %s",
             upstream.status_code,
@@ -273,6 +316,11 @@ async def execute_sparql_query(
             message=detail,
             status_code=upstream.status_code,
         )
+
+    empty = empty_sparql_json_from_reformulate_output(upstream.text)
+    if empty is not None:
+        logger.info("Ontop reformulate returned EMPTY IQ; returning no rows")
+        return SparqlExecuteSuccess(data=empty)
 
     var_types = extract_variable_types(upstream.text)
     sql = extract_native_sql(upstream.text)

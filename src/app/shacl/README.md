@@ -1,0 +1,177 @@
+# SHACL rules over an Ontop Virtual Knowledge Graph
+
+This package compiles SHACL Core semantics into SPARQL `SELECT` queries that
+report violations. It is intended to generate SPARQL that takes into account
+the characteristics of a virtual knowledge graph like Ontop.
+
+## Separation-of-concerns contract
+
+The SHACL layer:
+
+- preserves SHACL focus-node, value-node, and violation semantics;
+- emits valid SPARQL 1.1 suitable for the supported Ontop query surface;
+- refuses only SHACL features that are not implemented or that necessarily
+  generate a known Ontop/VKG anti-pattern listed below
+- never rewrites or weakens SHACL semantics merely to influence SQL pushdown
+
+Ontop owns SPARQL parsing, ontology-aware evaluation and reformulation. Ontop
+and the app's existing execution layer own native SQL generation and Databricks
+SQL execution. Whether valid SPARQL has uniquely typed projected variables,
+fully eliminates post-processing, or translates efficiently is therefore an
+Ontop/runtime result, not a reason for this compiler to change its semantics.
+
+RDFlib execution tests are convenient semantic regression checks. Live queries
+sent through the deployed app's `/sparql` endpoint are authoritative for the
+supported Ontop version, mappings, ontology, and Databricks SQL runtime.
+
+## Known Ontop/VKG anti-patterns
+
+Compiler refusals are intentionally narrow:
+
+| Pattern | Compiler behavior | Reason |
+| --- | --- | --- |
+| User-supplied `sh:zeroOrMorePath`, `sh:oneOrMorePath`, or `sh:zeroOrOnePath` | Refuse | General arbitrary-length property paths are not supported by Ontop. Class and targetClass subclass closure is `rdf:type` plus Ontop TBox rewriting, not a property-path star. |
+| `sh:closed` | Refuse while unimplemented | A faithful generic implementation enumerates predicates with a fully unbound predicate pattern so the app rejects that VKG-wide scan. A future implementation needs a mapping-aware finite predicate set. |
+| `sh:target` and `sh:sparql` | Refuse while unimplemented | Only SHACL Core predicates are in scope so SHACL-SPARQL rejected. |
+| `sh:flags` | Refuse | Ontop's Spark/Databricks dialect maps 3-argument SPARQL `REGEX` to `REGEXP_LIKE3`, which is not implemented (`SparkSQLDBFunctionSymbolFactory.getDBRegexpMatches3`). Databricks/Spark regexp is 2-argument; XPath flags (`i`, `s`, `m`, `q`, …) cannot be expressed in SPARQL without that third argument or rewriting the user pattern, which this compiler does not do. Unflagged 2-argument `REGEX` is supported. An upstream Ontop dialect PR is expected. |
+| A parsed SHACL Core component without a registered validator | Refuse while unimplemented | Silently omitting a constraint would produce an unsound conformance result. |
+
+The following are **not** compiler anti-patterns: `OPTIONAL`, `UNION`,
+subqueries, `DISTINCT`, aggregates, `GROUP BY`/`HAVING`, `FILTER`,
+`NOT EXISTS`, `VALUES`, `BIND`, fixed inverse/sequence/alternative paths,
+`REGEX`, RDF term tests, or datatype comparisons. They remain valid SPARQL and
+Ontop decides whether each concrete query can be reformulated and executed.
+In particular, this layer adds no restriction solely because an expression may
+be difficult to translate to SQL. See the repository's `SPARQL_FEATURES.md` for
+runtime guidance, which is diagnostic rather than compiler policy.
+
+## Status
+
+| Feature | Status |
+| --- | --- |
+| Parse Turtle shapes into an AST (`ShapesGraph`) | Done |
+| Node shapes and property shapes (typed or via `sh:property`) | Done |
+| Shape metadata (`sh:deactivated`, `sh:message`, `sh:severity`, `sh:name`, `sh:description`, `sh:order`) | Done |
+| Targets: `sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`, implicit class targets (shape also `rdfs:Class`) | Done (implicit via parse-time `TargetClass(self)`) |
+| Property shapes inherit targets from parent node shapes | Done |
+| One level of `sh:property` selected through a node shape | Done via `compile_shape` |
+| Nested `sh:property` under property shapes | Done via `_nested_property_results` |
+| SPARQL-based targets (`sh:target`) | Not started |
+| SPARQL-based constraints (`sh:sparql`) | Not started |
+| IRI `sh:path` on property shapes | Done (parsed and compiled) |
+| Complex SHACL paths | Inverse, sequence, and alternative compiled; `*`, `+`, and `?` rejected at compile time |
+| RDF lists (`sh:in`, `sh:and`, `sh:or`, `sh:xone`, `sh:ignoredProperties`, `sh:languageIn`) | Expanded |
+| Node-shape constraints compiled to SPARQL | Done for implemented leaf validators; property-only parameters are ill-formed |
+| Property-shape constraints compiled to SPARQL | Partial (see below) |
+| Execute SPARQL against the VKG via MCP `validate_shacl` | Done |
+| Assemble a `sh:ValidationReport` | Done (Turtle; `vkg:truncated` / `vkg:hasTargets` operational flags) |
+| R2RML mapping as evaluation context | Not started |
+| Check that classes and predicates appear in the mapping | Not started |
+| App / MCP / HTTP integration | Done for MCP `validate_shacl(shapes_turtle, shape_iri, limit=None)` and `POST /shacl?shape=&limit=` (shared `run_shacl_validation`; results capped at 100) |
+| Parse tests (`python3 -m pytest shacl/tests -m "not integration" -q` from `src/app`) | Done |
+| Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes (including node-shape leaf constraints via `BIND (?focus_node AS ?value)`), nested `sh:property` via `compile_shape` (the MCP path), supported complex paths, conforming results, unflagged `sh:pattern`, node kinds, range comparability, and distinct cardinality. The single known-failing live case (TBox-expanded `COUNT(DISTINCT ?value)`) is `xfail`'d, `strict=True` (`make shacl-it-destroy` tears the instance down) |
+
+## SPARQL validators (SHACL Core)
+
+[SHACL Core](https://www.w3.org/TR/shacl/#core-components) requires one validator per constraint component ([Appendix D](https://www.w3.org/TR/shacl/#SHACL-Core-Validators)). Each validator will live in `sparql_validator.py`, registered with `@sparql_validator(...)`, and emit a violation `SELECT` (or a composition of such queries) rather than the spec’s illustrative `ASK`.
+
+SHACL-SPARQL (`sh:SPARQLConstraintComponent` / `sh:sparql`, SPARQL-based targets, custom constraint components) is out of Core and is tracked only in Status above.
+
+`sh:property` is a Core constraint component (`sh:PropertyConstraintComponent`) but is stored on `Shape.property`, not as a `ConstraintComponent` dataclass. The product API, `SparqlValidator.compile_shape`, compiles the selected shape and one level of direct property children with the selected shape's effective targets. Nested `sh:property` under those children is compiled through `_nested_property_results`, rebinding focus to the parent's value nodes. Deactivated shapes and shapes with ``has_targets=false`` (no effective SHACL targets; this is a boolean, not a count) produce no queries. Malformed shape syntax raises `IllFormedShapeError`.
+
+Unless noted, a component applies to both node shapes and property shapes. Parameters marked *property shapes only* make a node shape ill-formed.
+
+### 4.1 Value type
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `ClassValidator` | `sh:ClassConstraintComponent` | `sh:class` (repeatable) | Done | Done (property and node shapes; `rdf:type` plus Ontop TBox) |
+| `DatatypeValidator` | `sh:DatatypeConstraintComponent` | `sh:datatype` | Done | Done (property and node shapes). A constraint that cannot produce violations because every mapped value already has the declared datatype may optimize to Ontop `EMPTY`; the SPARQL execution layer maps that to no violations, not a 500. |
+| `NodeKindValidator` | `sh:NodeKindConstraintComponent` | `sh:nodeKind` | Done | Done (property and node shapes) |
+
+### 4.2 Cardinality (property shapes only)
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `MinCountValidator` | `sh:MinCountConstraintComponent` | `sh:minCount` | Done | Done (property shapes only) |
+| `MaxCountValidator` | `sh:MaxCountConstraintComponent` | `sh:maxCount` | Done | Done (property shapes only) |
+
+### 4.3 Value range
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `MinExclusiveValidator` | `sh:MinExclusiveConstraintComponent` | `sh:minExclusive` | Done | Done (property and node shapes) |
+| `MinInclusiveValidator` | `sh:MinInclusiveConstraintComponent` | `sh:minInclusive` | Done | Done (property and node shapes) |
+| `MaxExclusiveValidator` | `sh:MaxExclusiveConstraintComponent` | `sh:maxExclusive` | Done | Done (property and node shapes) |
+| `MaxInclusiveValidator` | `sh:MaxInclusiveConstraintComponent` | `sh:maxInclusive` | Done | Done (property and node shapes) |
+
+### 4.4 String-based
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `MinLengthValidator` | `sh:MinLengthConstraintComponent` | `sh:minLength` | Done | Done (property and node shapes) |
+| `MaxLengthValidator` | `sh:MaxLengthConstraintComponent` | `sh:maxLength` | Done | Done (property and node shapes) |
+| `PatternValidator` | `sh:PatternConstraintComponent` | `sh:pattern`; `sh:flags` refused | Done | Done for unflagged `sh:pattern` (property and node shapes; 2-arg `REGEX`). `sh:flags` raises `UnsupportedShapeError` (Spark `REGEXP_LIKE3` gap) |
+| `LanguageInValidator` | `sh:LanguageInConstraintComponent` | `sh:languageIn` | Done | Done (property and node shapes) |
+| `UniqueLangValidator` | `sh:UniqueLangConstraintComponent` | `sh:uniqueLang` (property shapes only) | Done | Done (`uniqueLang false` emits no query) |
+
+### 4.5 Property pair
+
+`sh:lessThan` and `sh:lessThanOrEquals` are property shapes only.
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `EqualsValidator` | `sh:EqualsConstraintComponent` | `sh:equals` (repeatable) | Done | Done (property and node shapes; symmetric set difference) |
+| `DisjointValidator` | `sh:DisjointConstraintComponent` | `sh:disjoint` (repeatable) | Done | Done (property and node shapes) |
+| `LessThanValidator` | `sh:LessThanConstraintComponent` | `sh:lessThan` (repeatable) | Done | Done (property shapes only) |
+| `LessThanOrEqualsValidator` | `sh:LessThanOrEqualsConstraintComponent` | `sh:lessThanOrEquals` (repeatable) | Done | Done (property shapes only) |
+
+### 4.6 Logical (compose nested shapes)
+
+These do not emit a single filter; they combine conformance of nested shapes (conjunction, disjunction, negation, exactly-one).
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `NotValidator` | `sh:NotConstraintComponent` | `sh:not` (repeatable) | Done | Not started |
+| `AndValidator` | `sh:AndConstraintComponent` | `sh:and` (repeatable; RDF list of shapes) | Done | Not started |
+| `OrValidator` | `sh:OrConstraintComponent` | `sh:or` (repeatable; RDF list of shapes) | Done | Not started |
+| `XoneValidator` | `sh:XoneConstraintComponent` | `sh:xone` (repeatable; RDF list of shapes) | Done | Not started |
+
+### 4.7 Shape-based
+
+Qualified cardinality is property shapes only. Optional `sh:qualifiedValueShapesDisjoint` belongs to both qualified components.
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `NodeValidator` | `sh:NodeConstraintComponent` | `sh:node` (repeatable) | Done | Not started |
+| `PropertyValidator` | `sh:PropertyConstraintComponent` | `sh:property` (direct property shapes) | Done (`Shape.property`) | Done (`compile_shape` plus `_nested_property_results`) |
+| `QualifiedMinCountValidator` | `sh:QualifiedMinCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMinCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
+| `QualifiedMaxCountValidator` | `sh:QualifiedMaxCountConstraintComponent` | `sh:qualifiedValueShape`, `sh:qualifiedMaxCount`, optional `sh:qualifiedValueShapesDisjoint` | Done | Not started |
+
+### 4.8 Other
+
+| Validator | Component | Parameters | Parse | SPARQL |
+| --- | --- | --- | --- | --- |
+| `ClosedValidator` | `sh:ClosedConstraintComponent` | `sh:closed`, optional `sh:ignoredProperties` | Done | Not started |
+| `HasValueValidator` | `sh:HasValueConstraintComponent` | `sh:hasValue` (repeatable) | Done | Done (property shapes check existence; node shapes compare the focus node) |
+| `InValidator` | `sh:InConstraintComponent` | `sh:in` | Done | Done (property and node shapes; empty list flags every value node). Membership is RDF term identity via correlated `MINUS { VALUES ?value { … } }`, matching the spec SPARQL validator (`$in rdf:rest*/rdf:first $value`) without SPARQL `=` coercion |
+
+**29 Core validators.** SPARQL is done for 20 (`MinCount`, `MaxCount`, `Class`, `Datatype`, `NodeKind`, `Pattern`, `MinExclusive`, `MinInclusive`, `MaxExclusive`, `MaxInclusive`, `MinLength`, `MaxLength`, `LanguageIn`, `UniqueLang`, `HasValue`, `In`, `Equals`, `Disjoint`, `LessThan`, `LessThanOrEquals`). Implemented leaf validators support node shapes and property shapes with IRI, inverse, sequence, or alternative paths; cardinality, unique language, and ordered property pairs remain property-shape only. User paths containing `*`, `+`, or `?` are rejected at compile time.
+
+`sh:targetClass` and `ClassValidator` emit direct `rdf:type` and rely on
+Ontop's TBox rewriting for SHACL subclass closure. Cardinality validators use
+`COUNT(DISTINCT ?value)` because SHACL counts value nodes, not SPARQL solution
+multiplicity. Ontop full-native reformulation currently crashes
+(`NativeNode cannot accept a visitor`) when this aggregate is applied to a
+TBox-expanded superclass such as `ex:GeographicArea`; that runtime failure is
+listed in `UNSUPPORTED_SHACL_INVENTORY` (the compiler still emits the query).
+The live subclass-closure/minCount case (`target-class-subclass-closure` in
+`test_shacl_ontop.py`) is `pytest.mark.xfail(..., strict=True)`'d — the
+compiler still emits the query and the compile-time `query_contains`
+assertion for the direct `rdf:type ex:GeographicArea` pattern still runs, but
+the live HTTP/execution assertion is expected to fail until the upstream
+Ontop reformulation fix is released. `strict=True` means the case starts
+failing the suite again (XPASS) the moment Ontop begins returning HTTP 200
+with the expected bindings, as a prompt to remove the mark.
+
+`ClosedValidator` is the main VKG hazard: the spec enumerates *any* unexpected predicate on the value node. Prefer mapping-aware allowed-predicate lists over graph-wide property scans. Logical, `sh:node`, and qualified-count validators will reuse the leaf validators above rather than duplicating SPARQL.

@@ -4,8 +4,9 @@ This repo uses the [Ontop Virtual Knowledge Graph (VKG)](https://ontop-vkg.org/)
 All translated queries are executed using the user's identity, ensuring that the Unity Catalog permissions of the underlying tables are enforced.
 
 The app also provides an MCP endpoint for agents to iteratively validate SPARQL queries they generate against the ontology using the [Ontology-based Query Check (OBQC)](https://arxiv.org/abs/2405.11706) approach defined by Allemang and Sequeda.
+There is also a tool for running SHACL Core shapes against the VKG.
 
-For supported SPARQL features, common reformulation failures, and query rewrite patterns, see [SPARQL_FEATURES.md](SPARQL_FEATURES.md).
+For supported SPARQL features, common reformulation failures, and query rewrite patterns, see [SPARQL_FEATURES.md](SPARQL_FEATURES.md). For which SHACL Core components compile to SPARQL, see [src/app/shacl/README.md](src/app/shacl/README.md).
 
 ## Installation
 
@@ -70,6 +71,7 @@ BUNDLE_VAR_catalog=main BUNDLE_VAR_schema=default BUNDLE_VAR_instance=beta make 
 |------|-------------|
 | `/yasgui` | SPARQL query UI |
 | `/sparql` | SPARQL 1.1 endpoint |
+| `/shacl` | SHACL Core validation (`POST`, Turtle shapes graph) |
 | `/mcp` | TBox Toolbox MCP |
 | `/health` | Health check (Ontop + ontology loaded) |
 | `/mapper` | Visual R2RML mapping editor |
@@ -85,6 +87,7 @@ Public MCP URL: `https://<app-url>/mcp`
 | `describe_iri` | Neighborhood of the given IRI returned in Turtle format |
 | `check_sparql` | Ontology-Based Query Check (OBQC) |
 | `execute_sparql` | Run SPARQL against the VKG → SPARQL JSON or error text |
+| `validate_shacl` | Run one named SHACL shape against the VKG, returning a `ValidationReport` |
 
 ### Agent usage pattern
 
@@ -92,13 +95,54 @@ Public MCP URL: `https://<app-url>/mcp`
 2. Draft SPARQL
 3. `check_sparql` and rewrite based on violation messages (if any)
 4. `execute_sparql` and iterate based on the results
+5. Optionally `validate_shacl` to check instance data against a shape (see [SHACL validation](#shacl-validation))
 
-TBox tools use the in-memory ontology only. `execute_sparql` uses Ontop + Databricks SQL with the caller's Apps-forwarded access token.
+TBox tools use the in-memory ontology only. `execute_sparql` and `validate_shacl` use Ontop + Databricks SQL with the caller's Apps-forwarded access token.
+
+## SHACL validation
+
+The app compiles SHACL Core to SPARQL and evaluates **one named shape** against the implicit VKG (the same data graph as `/sparql`). Focus nodes come from SHACL targets (`sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`, and implicit class targets).
+
+| Surface | Request |
+|---------|---------|
+| MCP `validate_shacl` | `shapes_turtle`, `shape_iri`, optional `limit` |
+| `POST /shacl` | Shapes in query body. Query params `shape` (required IRI) and optional `limit` |
+
+`limit` caps the number of `sh:result` values (default and maximum 100). Pass a lower value to keep agent context small.
+
+The response is a SHACL `ValidationReport` in Turtle, plus two flags in `<urn:ontop-vkg:shacl#>`:
+
+- `vkg:truncated` — more violations existed than `limit`
+- `vkg:hasTargets` — if false, the shape declared no targets, the VKG was not queried, and `sh:conforms` is still true
+
+Unsupported or not-yet-compiled constructs are refused rather than skipped (including `sh:not` / `sh:and` / `sh:or` / `sh:xone`, `sh:node`, qualified cardinality, `sh:closed`, `sh:flags`, SPARQL-based SHACL, and `*` / `+` / `?` paths). Component-level coverage lives in [src/app/shacl/README.md](src/app/shacl/README.md).
+
+Example against the bundled TPC-H ontology:
+
+```turtle
+@prefix ex: <http://example.org/tpch/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+
+ex:CustomerShape a sh:NodeShape ;
+  sh:targetClass ex:Customer ;
+  sh:property [
+    sh:path ex:name ;
+    sh:minCount 1 ;
+  ] .
+```
+
+```bash
+curl -X POST \
+  "$APP_URL/shacl?shape=http://example.org/tpch/CustomerShape&limit=20" \
+  -H "Content-Type: text/turtle" \
+  --data-binary @customer_shape.ttl
+```
 
 ## Configuration
 
 The app's start command and environment variables are defined under the app's `config`
 block in `databricks.yml` rather than having a separate `app.yaml`.
+This means that deployments always need to be done via DABs and not using the Apps UI.
 
 Bundle variables in `databricks.yml`:
 

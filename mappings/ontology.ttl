@@ -40,12 +40,18 @@ ex:PartSupp a owl:Class ;
   skos:altLabel "Part supplier", "Inventory", "Stock", "Availability" ;
   rdfs:comment "Availability and cost of a part from a specific supplier." .
 
+ex:GeographicArea a owl:Class ;
+  rdfs:label "Geographic area" ;
+  rdfs:comment "Superclass used to exercise ontology-aware SHACL targetClass closure." .
+
 ex:Nation a owl:Class ;
+  rdfs:subClassOf ex:GeographicArea ;
   rdfs:label "Nation" ;
   skos:altLabel "Country", "State" ;
   rdfs:comment "A nation in which customers and suppliers are located." .
 
 ex:Region a owl:Class ;
+  rdfs:subClassOf ex:GeographicArea ;
   rdfs:label "Region" ;
   skos:altLabel "Area", "Territory", "Geography" ;
   rdfs:comment "A geographic region containing one or more nations." .

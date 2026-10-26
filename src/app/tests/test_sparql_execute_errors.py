@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,6 +13,8 @@ from config import Settings
 from sparql_execute import (
     SparqlExecuteError,
     SparqlExecuteSuccess,
+    empty_sparql_json_from_ontop_error,
+    empty_sparql_json_from_reformulate_output,
     execute_sparql_query,
 )
 from sparql_execute import is_permission_denied, permission_denied_summary
@@ -159,6 +162,89 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
     assert result.status_code == 400
     assert "Unsupported SPARQL feature: MINUS" in result.message
     _error_has_no_native_sql(result)
+
+
+EMPTY_IQ_MESSAGE = (
+    "it.unibz.inf.ontop.exception.OntopReformulationException: "
+    "Query is not fully translatable to a native query:\n"
+    "was expected to have an extended projection at the top. "
+    "IQ: EMPTY [focus_node, value]"
+)
+
+
+def test_empty_iq_error_is_empty_sparql_json() -> None:
+    expected = {
+        "head": {"vars": ["focus_node", "value"]},
+        "results": {"bindings": []},
+    }
+    assert empty_sparql_json_from_ontop_error(EMPTY_IQ_MESSAGE) == expected
+    # EmptyNode dump as IQ root, without the English wrapping phrase.
+    assert (
+        empty_sparql_json_from_ontop_error(
+            "Not fully translatable into a native query: IQ: EMPTY [focus_node, value]"
+        )
+        == expected
+    )
+    assert empty_sparql_json_from_ontop_error(
+        "was expected to have an extended projection at the top. IQ: UNION [c]"
+    ) is None
+    assert (
+        empty_sparql_json_from_ontop_error(
+            "was expected to have an extended projection at the top. IQ: UNION [c]\n"
+            "   EMPTY [c]"
+        )
+        is None
+    )
+
+
+def test_empty_iq_reformulate_tree_is_empty_sparql_json() -> None:
+    tree = (
+        "ans1(focus_node, value)\n"
+        "   CONSTRUCT [focus_node, value] "
+        "[focus_node/RDF(STRINGToSTRING(focus_node),IRI), "
+        "value/RDF(STRINGToSTRING(value),xsd:integer)]\n"
+        "      EMPTY [focus_node, value]\n"
+    )
+    assert empty_sparql_json_from_reformulate_output(tree) == {
+        "head": {"vars": ["focus_node", "value"]},
+        "results": {"bindings": []},
+    }
+    assert empty_sparql_json_from_reformulate_output(CONSTRUCT_REFORMULATE) is None
+
+
+def test_ontop_empty_iq_reformulation_returns_no_rows() -> None:
+    upstream = MagicMock()
+    upstream.status_code = 500
+    upstream.text = json.dumps(
+        {
+            "timestamp": "2026-01-01",
+            "status": 500,
+            "error": "Internal Server Error",
+            "message": EMPTY_IQ_MESSAGE,
+            "path": "/ontop/reformulate",
+        }
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = upstream
+
+    with patch("sparql_execute.run_sql") as run_sql:
+        result = asyncio.run(
+            execute_sparql_query(
+                "SELECT DISTINCT ?focus_node ?value WHERE { "
+                "?focus_node <ex:custKey> ?value . "
+                "FILTER (!isLiteral(?value) || datatype(?value) != "
+                "<http://www.w3.org/2001/XMLSchema#integer>) }",
+                "tok",
+                _settings(),
+                client,
+                _ontop_running(),
+            )
+        )
+
+    run_sql.assert_not_called()
+    assert isinstance(result, SparqlExecuteSuccess)
+    assert result.data["results"]["bindings"] == []
+    assert result.data["head"]["vars"] == ["focus_node", "value"]
 
 
 def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
