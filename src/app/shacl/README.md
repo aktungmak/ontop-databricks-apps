@@ -52,7 +52,7 @@ runtime guidance, which is diagnostic rather than compiler policy.
 | Parse Turtle shapes into an AST (`ShapesGraph`) | Done |
 | Node shapes and property shapes (typed or via `sh:property`) | Done |
 | Shape metadata (`sh:deactivated`, `sh:message`, `sh:severity`, `sh:name`, `sh:description`, `sh:order`) | Done |
-| Targets: `sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf` | Done |
+| Targets: `sh:targetClass`, `sh:targetNode`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`, implicit class targets (shape also `rdfs:Class`) | Done (implicit via parse-time `TargetClass(self)`) |
 | Property shapes inherit targets from parent node shapes | Done |
 | One level of `sh:property` selected through a node shape | Done via `compile_shape` |
 | Nested `sh:property` under property shapes | Done via `_nested_property_results` |

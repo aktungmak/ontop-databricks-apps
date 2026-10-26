@@ -81,6 +81,55 @@ def test_compiles_min_count_with_inherited_class_target_and_default_metadata() -
     assert "HAVING (COUNT(DISTINCT ?value) < 1)" in query
 
 
+def test_compiles_implicit_class_target_as_rdf_type_of_shape_iri() -> None:
+    queries = _compile(
+        """
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+        ex:Person a rdfs:Class, sh:NodeShape ;
+          sh:property ex:NameShape .
+
+        ex:NameShape a sh:PropertyShape ;
+          sh:path ex:name ;
+          sh:minCount 1 .
+        """
+    )
+
+    assert len(queries) == 1
+    query = _normalized(queries[0].query)
+    assert "SELECT DISTINCT ?focus_node WHERE" in query
+    assert (
+        "?focus_node "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/shacl-test/Person> ."
+    ) in query
+
+
+def test_compile_shape_implicit_class_target_has_targets() -> None:
+    result = SparqlValidator(
+        _parse(
+            """
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+            ex:Person a rdfs:Class, sh:NodeShape ;
+              sh:property [
+                sh:path ex:name ;
+                sh:minCount 1
+              ] .
+            """
+        )
+    ).compile_shape(EX.Person)
+
+    assert result.has_targets is True
+    assert len(result.queries) == 1
+    query = _normalized(result.queries[0].query)
+    assert (
+        "?focus_node "
+        "<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/shacl-test/Person> ."
+    ) in query
+
+
 def test_compiles_max_count_with_target_node_and_required_path() -> None:
     compiled = _compile(
         """

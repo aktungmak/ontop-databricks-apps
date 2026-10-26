@@ -6,7 +6,7 @@ from dataclasses import KW_ONLY, dataclass, field
 from enum import Enum
 
 from rdflib import Graph, Literal, Node, SH, URIRef
-from rdflib.namespace import RDF
+from rdflib.namespace import RDF, RDFS
 
 from .constraint_components import ConstraintComponent, parse_constraints
 from .rdf_tools import expand_rdf_list, literal_strings, optional_bool, optional_int
@@ -222,6 +222,15 @@ def _parse_severity(graph: Graph, shape_node: ShapeRef) -> Severity | URIRef | N
     return val
 
 
+def _is_shacl_instance(graph: Graph, node: Node, class_iri: URIRef) -> bool:
+    """True if ``node`` has ``rdf:type`` / ``rdfs:subClassOf*`` to ``class_iri``."""
+    result = graph.query(
+        "ASK { ?node rdf:type/rdfs:subClassOf* ?class }",
+        initBindings={"node": node, "class": class_iri},
+    )
+    return bool(result.askAnswer)
+
+
 def _parse_targets(graph: Graph, shape_node: ShapeRef) -> list[Target]:
     targets: list[Target] = []
     for obj in graph.objects(shape_node, SH.targetClass):
@@ -232,6 +241,16 @@ def _parse_targets(graph: Graph, shape_node: ShapeRef) -> list[Target]:
         targets.append(TargetSubjectsOf(targetSubjectsOf=obj))
     for obj in graph.objects(shape_node, SH.targetObjectsOf):
         targets.append(TargetObjectsOf(targetObjectsOf=obj))
+    if _is_shacl_instance(graph, shape_node, RDFS.Class):
+        if not isinstance(shape_node, URIRef):
+            raise IllFormedShapeError(
+                f"implicit-targetClass-nodeKind: class shape {shape_node} must be an IRI"
+            )
+        if not any(
+            isinstance(target, TargetClass) and target.targetClass == shape_node
+            for target in targets
+        ):
+            targets.append(TargetClass(targetClass=shape_node))
     return targets
 
 

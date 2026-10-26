@@ -1085,3 +1085,147 @@ def test_pattern_with_single_flags_is_well_formed() -> None:
     pattern = _constraint(shape, PatternConstraintComponent)
     assert pattern.pattern == "A"
     assert pattern.flags == "i"
+
+
+def test_implicit_class_target_from_rdfs_class_node_shape() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:Person a rdfs:Class, sh:NodeShape ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == [TargetClass(targetClass=EX.Person)]
+
+
+def test_explicit_target_class_self_is_not_duplicated() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:Person a rdfs:Class, sh:NodeShape ;
+          sh:targetClass ex:Person ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == [TargetClass(targetClass=EX.Person)]
+
+
+def test_implicit_class_target_unions_with_explicit_targets() -> None:
+    node = URIRef("http://example.org/tpch/alice")
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:Person a rdfs:Class, sh:NodeShape ;
+          sh:targetNode <http://example.org/tpch/alice> ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == [
+        TargetNode(targetNode=node),
+        TargetClass(targetClass=EX.Person),
+    ]
+
+
+def test_owl_class_without_rdfs_class_superclass_is_not_implicit_target() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:Person a owl:Class, sh:NodeShape ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == []
+
+
+def test_owl_class_with_rdfs_class_superclass_is_implicit_target() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix owl: <http://www.w3.org/2002/07/owl#> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        owl:Class rdfs:subClassOf rdfs:Class .
+        ex:Person a owl:Class, sh:NodeShape ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == [TargetClass(targetClass=EX.Person)]
+
+
+def test_custom_metaclass_subclass_of_rdfs_class_is_implicit_target() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:MyMeta rdfs:subClassOf rdfs:Class .
+        ex:Person a ex:MyMeta, sh:NodeShape ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    )
+    assert sg.shapes[EX.Person].targets == [TargetClass(targetClass=EX.Person)]
+
+
+def test_blank_node_class_shape_is_ill_formed() -> None:
+    ttl = """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        [] a rdfs:Class, sh:NodeShape ;
+          sh:property [
+            sh:path ex:name ;
+            sh:minCount 1
+          ] .
+        """
+    with pytest.raises(IllFormedShapeError, match="implicit-targetClass-nodeKind"):
+        _parse(ttl)
+
+
+def test_property_shape_that_is_also_a_class_gets_implicit_target() -> None:
+    sg = _parse(
+        """
+        @prefix ex: <http://example.org/tpch/> .
+        @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+
+        ex:NameShape a rdfs:Class, sh:PropertyShape ;
+          sh:path ex:name ;
+          sh:minCount 1 .
+        """
+    )
+    shape = sg.shapes[EX.NameShape]
+    assert isinstance(shape, PropertyShape)
+    assert shape.targets == [TargetClass(targetClass=EX.NameShape)]
