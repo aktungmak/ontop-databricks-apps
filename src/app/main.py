@@ -26,6 +26,7 @@ from ontop_manager import OntopProcessManager
 from routes.autogenerate import router as autogenerate_router
 from routes.mapping import router as mapping_router
 from routes.uc import router as uc_router
+from shacl_validate import ShaclValidationError, run_shacl_validation
 from sparql_execute import (
     SparqlExecuteError,
     SparqlExecuteSuccess,
@@ -218,6 +219,57 @@ async def sparql(request: Request) -> Response:
         content=json.dumps(result.data),
         media_type="application/sparql-results+json",
     )
+
+
+@app.post("/shacl")
+async def shacl(request: Request) -> Response:
+    """Validate one named SHACL shape; body is a Turtle shapes graph.
+
+    Query parameter ``shape`` is the absolute IRI of the shape to run.
+    The response is a SHACL ``ValidationReport`` in Turtle, produced by the
+    same ``run_shacl_validation`` path as MCP ``validate_shacl``.
+    """
+    try:
+        token = get_user_token(request)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return Response(
+            content=detail, status_code=exc.status_code, media_type="text/plain"
+        )
+
+    shape_iri = request.query_params.get("shape")
+    if not shape_iri:
+        return Response(
+            content="Missing required query parameter 'shape'",
+            status_code=400,
+            media_type="text/plain",
+        )
+
+    shapes_turtle = (await request.body()).decode("utf-8")
+    if not shapes_turtle.strip():
+        return Response(
+            content="Request body must be a Turtle shapes graph",
+            status_code=400,
+            media_type="text/plain",
+        )
+
+    try:
+        report = await run_shacl_validation(
+            shapes_turtle,
+            shape_iri,
+            token,
+            settings,
+            request.app.state.http_client,
+            ontop_manager,
+        )
+    except ShaclValidationError as exc:
+        return Response(
+            content=exc.message,
+            status_code=exc.status_code,
+            media_type="text/plain",
+        )
+
+    return Response(content=report.serialize(format="turtle"), media_type="text/turtle")
 
 
 # Keep this catch-all mount last so the FastAPI routes above retain precedence.

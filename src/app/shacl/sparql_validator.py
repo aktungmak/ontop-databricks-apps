@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable, TypeVar
+from typing import Callable, TypeVar
 
 from rdflib import Literal, Node, URIRef
 from rdflib.namespace import SH
@@ -62,7 +62,6 @@ __all__ = [
     "SparqlViolationQuery",
     "UNSUPPORTED_SHACL_INVENTORY",
     "ViolationContext",
-    "build_violation_results",
     "property_path_sparql",
     "sparql_validator",
     "validator_for",
@@ -142,7 +141,7 @@ class SparqlViolationQuery:
     query: str
     shape_ref: ShapeRef
     constraint_iri: URIRef
-    path: str | None
+    property_path: PropertyPath | None
     message: str | None
     severity: URIRef
 
@@ -160,54 +159,21 @@ class ShapeCompileResult:
     deactivated: bool = False
 
 
-def _binding_value(binding: dict[str, Any], variable: str) -> str | None:
-    term = binding.get(variable)
-    if not isinstance(term, dict):
-        return None
-    value = term.get("value")
-    return value if isinstance(value, str) else None
-
-
-def _shape_ref_string(shape_ref: ShapeRef) -> str:
-    return str(shape_ref) if isinstance(shape_ref, URIRef) else shape_ref.n3()
-
-
-def build_violation_results(
-    query: SparqlViolationQuery,
-    bindings: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """Combine SPARQL JSON bindings with compiler-owned result metadata."""
-    violations: list[dict[str, str]] = []
-    for binding in bindings:
-        focus_node = _binding_value(binding, "focus_node")
-        if focus_node is None:
-            raise ValueError("Violation binding is missing focus_node")
-        violation = {
-            "focus_node": focus_node,
-            "source_shape": _shape_ref_string(query.shape_ref),
-            "source_constraint_component": str(query.constraint_iri),
-            "result_severity": str(query.severity),
-        }
-        value = _binding_value(binding, "value")
-        if value is not None:
-            violation["value"] = value
-        if query.path is not None:
-            violation["result_path"] = query.path
-        if query.message is not None:
-            violation["result_message"] = query.message
-        violations.append(violation)
-    return violations
-
-
 @dataclass(frozen=True)
 class ViolationContext:
     shapes_graph: ShapesGraph
     focus_nodes_sparql: str
     value_nodes_sparql: str
-    path_sparql: str | None
+    property_path: PropertyPath | None
     shape_ref: ShapeRef
     message: str | None
     severity: URIRef
+
+    @property
+    def path_sparql(self) -> str | None:
+        if self.property_path is None:
+            return None
+        return property_path_sparql(self.property_path)
 
 
 class ConstraintValidator:
@@ -224,20 +190,11 @@ class ConstraintValidator:
         constraint: ConstraintComponent,
         query: str,
     ) -> SparqlViolationQuery:
-        result_path = ctx.path_sparql
-        if (
-            result_path is not None
-            and result_path.startswith("<")
-            and result_path.endswith(">")
-            and result_path.count("<") == 1
-            and result_path.count(">") == 1
-        ):
-            result_path = result_path[1:-1]
         return SparqlViolationQuery(
             query=query,
             shape_ref=ctx.shape_ref,
             constraint_iri=type(constraint).component_iri,
-            path=result_path,
+            property_path=ctx.property_path,
             message=ctx.message,
             severity=ctx.severity,
         )
@@ -727,10 +684,12 @@ class SparqlValidator:
     ) -> list[SparqlViolationQuery]:
         if nested_ancestors is None:
             nested_ancestors = {shape_ref}
-        path_sparql: str | None = None
+        property_path: PropertyPath | None = None
         if isinstance(shape, PropertyShape):
-            path_sparql = property_path_sparql(shape.path)
-            value_nodes_sparql = f"?focus_node {path_sparql} ?value ."
+            property_path = shape.path
+            value_nodes_sparql = (
+                f"?focus_node {property_path_sparql(shape.path)} ?value ."
+            )
         else:
             self._check_node_shape_parameters(shape_ref, shape)
             value_nodes_sparql = "BIND (?focus_node AS ?value)"
@@ -741,7 +700,7 @@ class SparqlValidator:
             shapes_graph=self.shapes_graph,
             focus_nodes_sparql=focus_nodes_sparql,
             value_nodes_sparql=value_nodes_sparql,
-            path_sparql=path_sparql,
+            property_path=property_path,
             shape_ref=shape_ref,
             message=shape.message[0] if shape.message else None,
             severity=severity_iri,

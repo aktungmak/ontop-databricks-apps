@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 from urllib.parse import urlparse
 
 import httpx
-from rdflib import Graph, URIRef
+from rdflib import Graph, Literal, URIRef
+from rdflib.namespace import RDF, SH
 
 from config import Settings
 from ontop_manager import OntopProcessManager
 from shacl import (
+    VKG,
     IllFormedShapeError,
     ShapesGraph,
     SparqlValidator,
     UnsupportedShapeError,
-    build_violation_results,
+    add_violation_results,
+    validation_report,
 )
 from sparql_execute import SparqlExecuteError, execute_sparql_query
 
@@ -50,9 +52,12 @@ async def run_shacl_validation(
     settings: Settings,
     http_client: httpx.AsyncClient,
     ontop_manager: OntopProcessManager,
-) -> dict[str, Any]:
-    """Parse, compile, execute, and assemble a validation result.
+) -> Graph:
+    """Parse, compile, execute, and assemble a ValidationReport.
     Either succeeds fully or fails entirely, no partial results."""
+    if not ontop_manager.is_running:
+        raise ShaclValidationError("Ontop is not running", 503)
+
     graph = Graph()
     try:
         graph.parse(data=shapes_turtle, format="turtle")
@@ -65,15 +70,11 @@ async def run_shacl_validation(
     except (IllFormedShapeError, UnsupportedShapeError) as err:
         raise ShaclValidationError(str(err), 400) from err
 
+    report = validation_report(truncated=False, has_targets=compiled.has_targets)
     if not compiled.queries:
-        return {
-            "conforms": True,
-            "violations": [],
-            "truncated": False,
-            "has_targets": compiled.has_targets,
-        }
+        return report
 
-    violations: list[dict[str, str]] = []
+    total = 0
     truncated = False
     query_limit = MAX_SHACL_VIOLATIONS + 1
     for compiled_query in compiled.queries:
@@ -91,18 +92,18 @@ async def run_shacl_validation(
             raise ShaclValidationError(
                 "SHACL query returned invalid SPARQL JSON bindings", 502
             )
+        remaining = MAX_SHACL_VIOLATIONS - total
+        if len(bindings) > remaining:
+            truncated = True
+            bindings = bindings[:remaining]
         try:
-            violations.extend(build_violation_results(compiled_query, bindings))
+            total += add_violation_results(report, compiled_query, bindings)
         except ValueError as err:
             raise ShaclValidationError(str(err), 502) from err
-        truncated = truncated or len(violations) > MAX_SHACL_VIOLATIONS
         if truncated:
             break  # further queries cannot appear in the capped payload
 
-    violations = violations[:MAX_SHACL_VIOLATIONS]
-    return {
-        "conforms": len(violations) == 0,
-        "violations": violations,
-        "truncated": truncated,
-        "has_targets": True,
-    }
+    if truncated:
+        report_node = report.value(predicate=RDF.type, object=SH.ValidationReport)
+        report.set((report_node, VKG.truncated, Literal(True)))
+    return report

@@ -192,8 +192,10 @@ _VALIDATE_SHACL_DESCRIPTION = (
     "Validate one shape IRI from a Turtle shapes graph against the implicit VKG data "
     "graph. Instance data cannot be supplied. Prefer a single level of sh:property "
     "on node shapes; avoid nesting sh:property under property shapes. "
-    "The has_targets flag is a boolean: false means the shape declares no SHACL "
-    "targets, so the VKG was not queried (conforms is still true). "
+    "Returns a SHACL ValidationReport in Turtle: sh:conforms, zero or more sh:result "
+    "ValidationResults, plus vkg:truncated and vkg:hasTargets "
+    "(<urn:ontop-vkg:shacl#>). vkg:hasTargets false means the shape declares no SHACL "
+    "targets, so the VKG was not queried (sh:conforms is still true). "
     "Unsupported or known-failing constructs: "
     + "; ".join(UNSUPPORTED_SHACL_INVENTORY)
     + "."
@@ -201,7 +203,7 @@ _VALIDATE_SHACL_DESCRIPTION = (
 
 
 @mcp.tool(description=_VALIDATE_SHACL_DESCRIPTION)
-async def validate_shacl(shapes_turtle: str, shape_iri: str) -> dict[str, Any]:
+async def validate_shacl(shapes_turtle: str, shape_iri: str) -> str:
     """Validate one selected SHACL shape against the implicit VKG data graph."""
     runtime = _require_runtime()
     try:
@@ -209,11 +211,8 @@ async def validate_shacl(shapes_turtle: str, shape_iri: str) -> dict[str, Any]:
     except McpAuthError as exc:
         raise ToolError(f"({exc.status_code}): {exc.message}") from exc
 
-    if not runtime.ontop_manager.is_running:
-        raise ToolError("(503): Ontop is not running")
-
     try:
-        return await run_shacl_validation(
+        report = await run_shacl_validation(
             shapes_turtle,
             shape_iri,
             token,
@@ -223,3 +222,4 @@ async def validate_shacl(shapes_turtle: str, shape_iri: str) -> dict[str, Any]:
         )
     except ShaclValidationError as exc:
         raise ToolError(f"({exc.status_code}): {exc.message}") from exc
+    return report.serialize(format="turtle")

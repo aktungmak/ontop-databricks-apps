@@ -8,11 +8,11 @@ import pytest
 from rdflib import BNode, Graph, Namespace
 from rdflib.namespace import SH
 
-from shacl.shapes import ShapesGraph
+from shacl.shapes import PredicatePath, ShapesGraph
 from shacl.sparql_validator import (
     SparqlValidator,
     SparqlViolationQuery,
-    build_violation_results,
+    property_path_sparql,
 )
 from shacl.types import IllFormedShapeError, UnsupportedShapeError
 
@@ -61,7 +61,7 @@ def test_compiles_min_count_with_inherited_class_target_and_default_metadata() -
     assert len(queries) == 1
     compiled = queries[0]
     assert compiled.constraint_iri == SH.MinCountConstraintComponent
-    assert compiled.path == str(EX.name)
+    assert compiled.property_path == PredicatePath(EX.name)
     assert compiled.message is None
     assert compiled.severity == SH.Violation
 
@@ -153,7 +153,7 @@ def test_compiles_unflagged_pattern_as_two_arg_regex() -> None:
     )[0]
 
     assert compiled.constraint_iri == SH.PatternConstraintComponent
-    assert compiled.path == str(EX.code)
+    assert compiled.property_path == PredicatePath(EX.code)
     assert compiled.message == "Code must contain letters only"
     assert compiled.severity == SH.Warning
     query = _normalized(compiled.query)
@@ -208,7 +208,7 @@ def test_node_shape_leaf_constraint_binds_focus_as_value() -> None:
         """
     )[0]
 
-    assert compiled.path is None
+    assert compiled.property_path is None
     assert "BIND (?focus_node AS ?value)" in _normalized(compiled.query)
 
 
@@ -222,7 +222,10 @@ def test_inverse_path_compiles_for_class_constraint() -> None:
         """
     )[0]
 
-    assert compiled.path == "^<http://example.org/shacl-test/manages>"
+    assert (
+        property_path_sparql(compiled.property_path)
+        == "^<http://example.org/shacl-test/manages>"
+    )
     assert (
         "?focus_node ^<http://example.org/shacl-test/manages> ?value ."
         in _normalized(compiled.query)
@@ -282,7 +285,7 @@ def test_compiles_supported_property_path_snapshots(
         """
     )[0]
 
-    assert compiled.path == expected
+    assert property_path_sparql(compiled.property_path) == expected
     assert f"?focus_node {expected} ?value ." in _normalized(compiled.query)
 
 
@@ -343,7 +346,7 @@ def test_multiple_supported_constraints_compile_one_query_each() -> None:
         SH.DatatypeConstraintComponent,
         SH.PatternConstraintComponent,
     }
-    assert all(query.path == str(EX.value) for query in queries)
+    assert all(query.property_path == PredicatePath(EX.value) for query in queries)
 
 
 def test_executes_min_count_with_inherited_target_class_including_blank_nodes() -> None:
@@ -468,7 +471,7 @@ def test_executes_nested_property_shape_with_value_nodes_as_focus() -> None:
     )
 
     assert compiled.constraint_iri == SH.MinCountConstraintComponent
-    assert compiled.path == str(EX.city)
+    assert compiled.property_path == PredicatePath(EX.city)
     assert {tuple(row) for row in graph.query(compiled.query)} == {
         (EX.BobAddress,)
     }
@@ -502,7 +505,7 @@ def test_executes_doubly_nested_property_shape_focus() -> None:
     )
 
     assert compiled.constraint_iri == SH.MinCountConstraintComponent
-    assert compiled.path == str(EX.label)
+    assert compiled.property_path == PredicatePath(EX.label)
     assert {tuple(row) for row in graph.query(compiled.query)} == {(EX.Paris,)}
 
 
@@ -1447,7 +1450,7 @@ def test_compile_shape_compiles_nested_property() -> None:
 
     assert len(result.queries) == 1
     assert result.queries[0].constraint_iri == SH.MinCountConstraintComponent
-    assert result.queries[0].path == str(EX.city)
+    assert result.queries[0].property_path == PredicatePath(EX.city)
     assert result.has_targets is True
     assert result.deactivated is False
 
@@ -1529,35 +1532,3 @@ def test_compile_shape_rejects_sparql_target() -> None:
 
     with pytest.raises(UnsupportedShapeError, match=r"SPARQL-based target sh:target"):
         validator.compile_shape(EX.PersonShape)
-
-
-def test_result_builder_combines_bindings_and_metadata_without_cardinality_value() -> None:
-    queries = SparqlValidator(
-        _parse(
-            """
-            ex:PersonShape a sh:NodeShape ;
-              sh:targetClass ex:Person ;
-              sh:property ex:NameShape .
-            ex:NameShape a sh:PropertyShape ;
-              sh:path ex:name ;
-              sh:minCount 1 ;
-              sh:message "Name is required" .
-            """
-        )
-    ).compile_shape(EX.PersonShape).queries
-
-    violations = build_violation_results(
-        queries[0],
-        [{"focus_node": {"type": "uri", "value": str(EX.Alice)}}],
-    )
-
-    assert violations == [
-        {
-            "focus_node": str(EX.Alice),
-            "source_shape": str(EX.NameShape),
-            "source_constraint_component": str(SH.MinCountConstraintComponent),
-            "result_path": str(EX.name),
-            "result_message": "Name is required",
-            "result_severity": str(SH.Violation),
-        }
-    ]

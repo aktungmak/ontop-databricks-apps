@@ -1,18 +1,24 @@
-"""Tests for the validate_shacl MCP adapter and app orchestrator."""
+"""Tests for the validate_shacl MCP adapter, HTTP /shacl, and app orchestrator."""
 
 from __future__ import annotations
 
 import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import quote
 
 import httpx
 import pytest
+from fastapi.testclient import TestClient
 from fastmcp.exceptions import ToolError
+from rdflib import Graph, Literal, URIRef
+from rdflib.namespace import RDF, SH
 
+import main
 from config import Settings
 from mcp_server import McpAuthError, McpRuntime, configure, validate_shacl
 from ontology_store import OntologyStore
+from shacl.report import VKG
 from shacl_validate import MAX_SHACL_VIOLATIONS
 from sparql_execute import SparqlExecuteError, SparqlExecuteSuccess
 
@@ -28,6 +34,11 @@ ex:NameShape a sh:PropertyShape ;
   sh:path ex:name ;
   sh:minCount 1 .
 """
+
+SHAPE_IRI = "http://example.org/PersonShape"
+ALICE = URIRef("http://example.org/Alice")
+NAME_SHAPE = URIRef("http://example.org/NameShape")
+NAME = URIRef("http://example.org/name")
 
 
 def _settings() -> Settings:
@@ -66,8 +77,26 @@ def _success(bindings: list[dict]) -> SparqlExecuteSuccess:
     )
 
 
-def _call(shapes: str = SHAPES, shape: str = "http://example.org/PersonShape"):
+def _call(shapes: str = SHAPES, shape: str = SHAPE_IRI) -> str:
     return asyncio.run(validate_shacl(shapes, shape))
+
+
+def _report(turtle: str) -> Graph:
+    graph = Graph()
+    graph.parse(data=turtle, format="turtle")
+    return graph
+
+
+def _report_node(graph: Graph):
+    reports = list(graph.subjects(RDF.type, SH.ValidationReport))
+    assert len(reports) == 1
+    return reports[0]
+
+
+def _literal_bool(graph: Graph, subject, predicate) -> bool:
+    value = graph.value(subject, predicate)
+    assert value == Literal(True) or value == Literal(False)
+    return bool(value)
 
 
 def test_missing_targets_skips_warehouse() -> None:
@@ -81,20 +110,20 @@ def test_missing_targets_skips_warehouse() -> None:
         patch("mcp_server.get_mcp_user_token", return_value="tok"),
         patch("shacl_validate.execute_sparql_query", new_callable=AsyncMock) as execute,
     ):
-        result = _call(shapes, "http://example.org/Shape")
+        turtle = _call(shapes, "http://example.org/Shape")
 
-    assert result == {
-        "conforms": True,
-        "violations": [],
-        "truncated": False,
-        "has_targets": False,
-    }
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, SH.conforms) is True
+    assert _literal_bool(graph, report, VKG.truncated) is False
+    assert _literal_bool(graph, report, VKG.hasTargets) is False
+    assert list(graph.objects(report, SH.result)) == []
     execute.assert_not_awaited()
 
 
 def test_violation_payload_and_limit_wrapper() -> None:
     _runtime()
-    binding = {"focus_node": {"type": "uri", "value": "http://example.org/Alice"}}
+    binding = {"focus_node": {"type": "uri", "value": str(ALICE)}}
     with (
         patch("mcp_server.get_mcp_user_token", return_value="tok"),
         patch(
@@ -103,16 +132,21 @@ def test_violation_payload_and_limit_wrapper() -> None:
             return_value=_success([binding]),
         ) as execute,
     ):
-        result = _call()
+        turtle = _call()
 
-    assert result["conforms"] is False
-    assert result["truncated"] is False
-    assert result["violations"][0]["focus_node"] == "http://example.org/Alice"
-    assert "value" not in result["violations"][0]
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, SH.conforms) is False
+    assert _literal_bool(graph, report, VKG.truncated) is False
+    result = next(graph.objects(report, SH.result))
+    assert graph.value(result, SH.focusNode) == ALICE
+    assert graph.value(result, SH.sourceShape) == NAME_SHAPE
+    assert graph.value(result, SH.resultPath) == NAME
+    assert graph.value(result, SH.value) is None
     query = execute.await_args.args[0]
     assert query.startswith("SELECT * WHERE")
     assert query.endswith(f"LIMIT {MAX_SHACL_VIOLATIONS + 1}")
-    assert query not in str(result)
+    assert query not in turtle
 
 
 def test_empty_bindings_conform() -> None:
@@ -125,21 +159,21 @@ def test_empty_bindings_conform() -> None:
             return_value=_success([]),
         ),
     ):
-        result = _call()
+        turtle = _call()
 
-    assert result == {
-        "conforms": True,
-        "violations": [],
-        "truncated": False,
-        "has_targets": True,
-    }
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, SH.conforms) is True
+    assert _literal_bool(graph, report, VKG.truncated) is False
+    assert _literal_bool(graph, report, VKG.hasTargets) is True
+    assert list(graph.objects(report, SH.result)) == []
 
 
 def test_second_query_error_discards_prior_rows() -> None:
     _runtime()
     shapes = SHAPES.replace("sh:minCount 1", "sh:minCount 1 ; sh:maxCount 2")
     first = _success(
-        [{"focus_node": {"type": "uri", "value": "http://example.org/Alice"}}]
+        [{"focus_node": {"type": "uri", "value": str(ALICE)}}]
     )
     second = SparqlExecuteError("Reformulation failed", 502)
     with (
@@ -171,11 +205,13 @@ def test_truncates_n_plus_one_bindings() -> None:
             side_effect=[_success(bindings), _success([])],
         ) as execute,
     ):
-        result = _call(shapes)
+        turtle = _call(shapes)
 
-    assert result["truncated"] is True
-    assert result["conforms"] is False
-    assert len(result["violations"]) == MAX_SHACL_VIOLATIONS
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert _literal_bool(graph, report, SH.conforms) is False
+    assert len(list(graph.objects(report, SH.result))) == MAX_SHACL_VIOLATIONS
     assert execute.await_count == 1
 
 
@@ -200,10 +236,12 @@ def test_stops_when_combined_violations_exceed_cap() -> None:
             side_effect=[_success(first), _success(second), _success([])],
         ) as execute,
     ):
-        result = _call(shapes)
+        turtle = _call(shapes)
 
-    assert result["truncated"] is True
-    assert len(result["violations"]) == MAX_SHACL_VIOLATIONS
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert len(list(graph.objects(report, SH.result))) == MAX_SHACL_VIOLATIONS
     assert execute.await_count == 2
 
 
@@ -222,10 +260,10 @@ def test_missing_token_maps_401() -> None:
     [
         (
             SHAPES.replace("sh:minCount 1", "sh:not ex:OtherShape"),
-            "http://example.org/PersonShape",
+            SHAPE_IRI,
             "NotConstraintComponent",
         ),
-        ("not valid turtle", "http://example.org/PersonShape", "Invalid Turtle"),
+        ("not valid turtle", SHAPE_IRI, "Invalid Turtle"),
         (SHAPES, "http://example.org/MissingShape", "was not found"),
     ],
 )
@@ -269,3 +307,110 @@ def test_permission_denied_maps_403() -> None:
 
     assert str(exc_info.value).startswith("(403):")
     assert "Unity Catalog access" in str(exc_info.value)
+
+
+def _http_client(*, running: bool = True) -> TestClient:
+    manager = MagicMock()
+    manager.is_running = running
+    main.ontop_manager = manager
+    main.app.state.http_client = AsyncMock(spec=httpx.AsyncClient)
+    return TestClient(main.app, raise_server_exceptions=False)
+
+
+def test_http_shacl_returns_turtle_validation_report() -> None:
+    binding = {"focus_node": {"type": "uri", "value": str(ALICE)}}
+    with patch(
+        "shacl_validate.execute_sparql_query",
+        new_callable=AsyncMock,
+        return_value=_success([binding]),
+    ):
+        response = _http_client().post(
+            f"/shacl?shape={quote(SHAPE_IRI, safe='')}",
+            headers={
+                "x-forwarded-access-token": "tok",
+                "content-type": "text/turtle",
+            },
+            content=SHAPES,
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/turtle")
+    graph = _report(response.text)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, SH.conforms) is False
+    result = next(graph.objects(report, SH.result))
+    assert graph.value(result, SH.focusNode) == ALICE
+
+
+def test_http_and_mcp_share_the_same_report() -> None:
+    _runtime()
+    binding = {"focus_node": {"type": "uri", "value": str(ALICE)}}
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch(
+            "shacl_validate.execute_sparql_query",
+            new_callable=AsyncMock,
+            return_value=_success([binding]),
+        ),
+    ):
+        mcp_turtle = _call()
+        http = _http_client()
+        response = http.post(
+            f"/shacl?shape={quote(SHAPE_IRI, safe='')}",
+            headers={
+                "x-forwarded-access-token": "tok",
+                "content-type": "text/turtle",
+            },
+            content=SHAPES,
+        )
+
+    assert response.status_code == 200
+    assert _report(mcp_turtle).isomorphic(_report(response.text))
+
+
+def test_http_missing_shape_param_is_400() -> None:
+    response = _http_client().post(
+        "/shacl",
+        headers={"x-forwarded-access-token": "tok", "content-type": "text/turtle"},
+        content=SHAPES,
+    )
+    assert response.status_code == 400
+    assert "shape" in response.text
+
+
+def test_http_empty_body_is_400() -> None:
+    response = _http_client().post(
+        f"/shacl?shape={quote(SHAPE_IRI, safe='')}",
+        headers={
+            "x-forwarded-access-token": "tok",
+            "content-type": "text/turtle",
+        },
+        content="  \n",
+    )
+    assert response.status_code == 400
+    assert "Turtle shapes graph" in response.text
+
+
+def test_http_missing_token_is_401() -> None:
+    response = _http_client().post(
+        f"/shacl?shape={quote(SHAPE_IRI, safe='')}",
+        headers={"content-type": "text/turtle"},
+        content=SHAPES,
+    )
+    assert response.status_code == 401
+
+
+def test_http_ontop_down_is_503() -> None:
+    with patch("shacl_validate.execute_sparql_query", new_callable=AsyncMock) as execute:
+        response = _http_client(running=False).post(
+            f"/shacl?shape={quote(SHAPE_IRI, safe='')}",
+            headers={
+                "x-forwarded-access-token": "tok",
+                "content-type": "text/turtle",
+            },
+            content=SHAPES,
+        )
+
+    assert response.status_code == 503
+    assert "Ontop is not running" in response.text
+    execute.assert_not_awaited()
