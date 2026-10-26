@@ -77,8 +77,24 @@ def _success(bindings: list[dict]) -> SparqlExecuteSuccess:
     )
 
 
-def _call(shapes: str = SHAPES, shape: str = SHAPE_IRI) -> str:
-    return asyncio.run(validate_shacl(shapes, shape))
+def _call(
+    shapes: str = SHAPES, shape: str = SHAPE_IRI, limit: int | None = None
+) -> str:
+    return asyncio.run(validate_shacl(shapes, shape, limit))
+
+
+def _http_post(client: TestClient, *, limit: str | None = None, content: str = SHAPES):
+    params = f"shape={quote(SHAPE_IRI, safe='')}"
+    if limit is not None:
+        params = f"{params}&limit={limit}"
+    return client.post(
+        f"/shacl?{params}",
+        headers={
+            "x-forwarded-access-token": "tok",
+            "content-type": "text/turtle",
+        },
+        content=content,
+    )
 
 
 def _report(turtle: str) -> Graph:
@@ -242,6 +258,89 @@ def test_stops_when_combined_violations_exceed_cap() -> None:
     report = _report_node(graph)
     assert _literal_bool(graph, report, VKG.truncated) is True
     assert len(list(graph.objects(report, SH.result))) == MAX_SHACL_VIOLATIONS
+    assert execute.await_count == 2
+
+
+def test_mcp_client_limit_truncates() -> None:
+    _runtime()
+    bindings = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/{index}"}}
+        for index in range(6)
+    ]
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch(
+            "shacl_validate.execute_sparql_query",
+            new_callable=AsyncMock,
+            return_value=_success(bindings),
+        ) as execute,
+    ):
+        turtle = _call(limit=5)
+
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert len(list(graph.objects(report, SH.result))) == 5
+    query = execute.await_args.args[0]
+    assert query.endswith("LIMIT 6")
+
+
+def test_mcp_omitted_limit_defaults_to_server_cap() -> None:
+    _runtime()
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch(
+            "shacl_validate.execute_sparql_query",
+            new_callable=AsyncMock,
+            return_value=_success([]),
+        ) as execute,
+    ):
+        _call()
+
+    query = execute.await_args.args[0]
+    assert query.endswith(f"LIMIT {MAX_SHACL_VIOLATIONS + 1}")
+
+
+@pytest.mark.parametrize("limit", [0, -1, 101])
+def test_mcp_invalid_limit_is_400(limit: int) -> None:
+    _runtime()
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch("shacl_validate.execute_sparql_query", new_callable=AsyncMock) as execute,
+    ):
+        with pytest.raises(ToolError) as exc_info:
+            _call(limit=limit)
+
+    assert str(exc_info.value).startswith("(400):")
+    assert "limit" in str(exc_info.value)
+    execute.assert_not_awaited()
+
+
+def test_mcp_combined_queries_honor_client_limit() -> None:
+    _runtime()
+    shapes = SHAPES.replace("sh:minCount 1", "sh:minCount 1 ; sh:maxCount 2")
+    first = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/a{index}"}}
+        for index in range(4)
+    ]
+    second = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/b{index}"}}
+        for index in range(2)
+    ]
+    with (
+        patch("mcp_server.get_mcp_user_token", return_value="tok"),
+        patch(
+            "shacl_validate.execute_sparql_query",
+            new_callable=AsyncMock,
+            side_effect=[_success(first), _success(second), _success([])],
+        ) as execute,
+    ):
+        turtle = _call(shapes, limit=5)
+
+    graph = _report(turtle)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert len(list(graph.objects(report, SH.result))) == 5
     assert execute.await_count == 2
 
 
@@ -414,3 +513,72 @@ def test_http_ontop_down_is_503() -> None:
     assert response.status_code == 503
     assert "Ontop is not running" in response.text
     execute.assert_not_awaited()
+
+
+def test_http_client_limit_truncates() -> None:
+    bindings = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/{index}"}}
+        for index in range(6)
+    ]
+    with patch(
+        "shacl_validate.execute_sparql_query",
+        new_callable=AsyncMock,
+        return_value=_success(bindings),
+    ) as execute:
+        response = _http_post(_http_client(), limit="5")
+
+    assert response.status_code == 200
+    graph = _report(response.text)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert len(list(graph.objects(report, SH.result))) == 5
+    query = execute.await_args.args[0]
+    assert query.endswith("LIMIT 6")
+
+
+def test_http_omitted_limit_defaults_to_server_cap() -> None:
+    with patch(
+        "shacl_validate.execute_sparql_query",
+        new_callable=AsyncMock,
+        return_value=_success([]),
+    ) as execute:
+        response = _http_post(_http_client())
+
+    assert response.status_code == 200
+    query = execute.await_args.args[0]
+    assert query.endswith(f"LIMIT {MAX_SHACL_VIOLATIONS + 1}")
+
+
+@pytest.mark.parametrize("limit", ["0", "-1", "101", "abc"])
+def test_http_invalid_limit_is_400(limit: str) -> None:
+    with patch("shacl_validate.execute_sparql_query", new_callable=AsyncMock) as execute:
+        response = _http_post(_http_client(), limit=limit)
+
+    assert response.status_code == 400
+    assert "limit" in response.text
+    execute.assert_not_awaited()
+
+
+def test_http_combined_queries_honor_client_limit() -> None:
+    shapes = SHAPES.replace("sh:minCount 1", "sh:minCount 1 ; sh:maxCount 2")
+    first = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/a{index}"}}
+        for index in range(4)
+    ]
+    second = [
+        {"focus_node": {"type": "uri", "value": f"http://example.org/b{index}"}}
+        for index in range(2)
+    ]
+    with patch(
+        "shacl_validate.execute_sparql_query",
+        new_callable=AsyncMock,
+        side_effect=[_success(first), _success(second), _success([])],
+    ) as execute:
+        response = _http_post(_http_client(), limit="5", content=shapes)
+
+    assert response.status_code == 200
+    graph = _report(response.text)
+    report = _report_node(graph)
+    assert _literal_bool(graph, report, VKG.truncated) is True
+    assert len(list(graph.objects(report, SH.result))) == 5
+    assert execute.await_count == 2

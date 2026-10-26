@@ -196,6 +196,7 @@ _VALIDATE_SHACL_DESCRIPTION = (
     "ValidationResults, plus vkg:truncated and vkg:hasTargets "
     "(<urn:ontop-vkg:shacl#>). vkg:hasTargets false means the shape declares no SHACL "
     "targets, so the VKG was not queried (sh:conforms is still true). "
+    "Results are capped (default 100); pass optional limit for a lower positive count. "
     "Unsupported or known-failing constructs: "
     + "; ".join(UNSUPPORTED_SHACL_INVENTORY)
     + "."
@@ -203,7 +204,9 @@ _VALIDATE_SHACL_DESCRIPTION = (
 
 
 @mcp.tool(description=_VALIDATE_SHACL_DESCRIPTION)
-async def validate_shacl(shapes_turtle: str, shape_iri: str) -> str:
+async def validate_shacl(
+    shapes_turtle: str, shape_iri: str, limit: int | None = None
+) -> str:
     """Validate one selected SHACL shape against the implicit VKG data graph."""
     runtime = _require_runtime()
     try:
@@ -219,6 +222,7 @@ async def validate_shacl(shapes_turtle: str, shape_iri: str) -> str:
             runtime.settings,
             runtime.http_client,
             runtime.ontop_manager,
+            limit,
         )
     except ShaclValidationError as exc:
         raise ToolError(f"({exc.status_code}): {exc.message}") from exc

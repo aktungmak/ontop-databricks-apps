@@ -226,6 +226,7 @@ async def shacl(request: Request) -> Response:
     """Validate one named SHACL shape; body is a Turtle shapes graph.
 
     Query parameter ``shape`` is the absolute IRI of the shape to run.
+    Optional ``limit`` caps ValidationResults (default 100, max 100).
     The response is a SHACL ``ValidationReport`` in Turtle, produced by the
     same ``run_shacl_validation`` path as MCP ``validate_shacl``.
     """
@@ -253,6 +254,16 @@ async def shacl(request: Request) -> Response:
             media_type="text/plain",
         )
 
+    raw_limit = request.query_params.get("limit")
+    try:
+        limit = None if raw_limit is None else int(raw_limit)
+    except ValueError:
+        return Response(
+            content="limit must be a positive integer",
+            status_code=400,
+            media_type="text/plain",
+        )
+
     try:
         report = await run_shacl_validation(
             shapes_turtle,
@@ -261,6 +272,7 @@ async def shacl(request: Request) -> Response:
             settings,
             request.app.state.http_client,
             ontop_manager,
+            limit,
         )
     except ShaclValidationError as exc:
         return Response(

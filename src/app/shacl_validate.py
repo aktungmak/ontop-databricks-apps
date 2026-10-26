@@ -52,9 +52,19 @@ async def run_shacl_validation(
     settings: Settings,
     http_client: httpx.AsyncClient,
     ontop_manager: OntopProcessManager,
+    limit: int | None = None,
 ) -> Graph:
     """Parse, compile, execute, and assemble a ValidationReport.
     Either succeeds fully or fails entirely, no partial results."""
+    if limit is None:
+        cap = MAX_SHACL_VIOLATIONS
+    elif not 1 <= limit <= MAX_SHACL_VIOLATIONS:
+        raise ShaclValidationError(
+            f"limit must be between 1 and {MAX_SHACL_VIOLATIONS}",
+            400,
+        )
+    else:
+        cap = limit
     if not ontop_manager.is_running:
         raise ShaclValidationError("Ontop is not running", 503)
 
@@ -76,7 +86,7 @@ async def run_shacl_validation(
 
     total = 0
     truncated = False
-    query_limit = MAX_SHACL_VIOLATIONS + 1
+    query_limit = cap + 1
     for compiled_query in compiled.queries:
         result = await execute_sparql_query(
             _limited_query(compiled_query.query, query_limit),
@@ -92,7 +102,7 @@ async def run_shacl_validation(
             raise ShaclValidationError(
                 "SHACL query returned invalid SPARQL JSON bindings", 502
             )
-        remaining = MAX_SHACL_VIOLATIONS - total
+        remaining = cap - total
         if len(bindings) > remaining:
             truncated = True
             bindings = bindings[:remaining]

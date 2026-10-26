@@ -67,7 +67,7 @@ runtime guidance, which is diagnostic rather than compiler policy.
 | Assemble a `sh:ValidationReport` | Done (Turtle; `vkg:truncated` / `vkg:hasTargets` operational flags) |
 | R2RML mapping as evaluation context | Not started |
 | Check that classes and predicates appear in the mapping | Not started |
-| App / MCP / HTTP integration | Done for MCP `validate_shacl(shapes_turtle, shape_iri)` and `POST /shacl?shape=` (shared `run_shacl_validation`) |
+| App / MCP / HTTP integration | Done for MCP `validate_shacl(shapes_turtle, shape_iri, limit=None)` and `POST /shacl?shape=&limit=` (shared `run_shacl_validation`; results capped at 100) |
 | Parse tests (`python3 -m pytest shacl/tests -m "not integration" -q` from `src/app`) | Done |
 | Live Ontop tests (`make shacl-it`; `shacl/tests/test_shacl_ontop.py`) | Done for all supported targets, node/property shapes (including node-shape leaf constraints via `BIND (?focus_node AS ?value)`), nested `sh:property` via `compile_shape` (the MCP path), supported complex paths, conforming results, unflagged `sh:pattern`, node kinds, range comparability, and distinct cardinality. The single known-failing live case (TBox-expanded `COUNT(DISTINCT ?value)`) is `xfail`'d, `strict=True` (`make shacl-it-destroy` tears the instance down) |
 
