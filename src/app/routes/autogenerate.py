@@ -23,6 +23,37 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 JOB_TTL_SECONDS = 3600
+SYSTEM_PROMPT = """\
+You are an R2RML mapping expert. Output ONLY valid Turtle R2RML: one or more rr:TriplesMap for this table. Do not wrap output in markdown fences. Output only Turtle: your whole answer is Turtle, with no reasoning, notes or tags in it.
+
+Naming:
+- Name the first map with exactly the fragment IRI given in the user message under 'Use fragment IRI'.
+- Name any others by adding a suffix to that fragment.
+
+Structure:
+- Use rr:logicalTable with rr:tableName.
+- Include rr:subjectMap with rr:template and rr:class, and rr:predicateObjectMap entries that state what the data means in the ontology.
+- Follow the patterns in the existing mapping context. You may include rr:datatype on columns when appropriate.
+- A row can describe more than one thing, for example a batch that consumes inputs and produces an output. Write a triples map for each thing the row describes, and map every relationship that the existing mapping maps for the same kind of table.
+
+Properties:
+- Check each property's rdfs:range in the reference ontology before you use it.
+- If the range is a class, the object must be a link: use rr:template or rr:parentTriplesMap, never rr:column.
+- If the range is an xsd datatype, the object is a value: use rr:column with rr:datatype.
+
+Columns:
+- Use only the columns listed for this table, with their exact names.
+- Do not copy column names from the existing mapping: other tables have different columns.
+
+Identity:
+- Declare each kind of thing (give it rr:class and a label) from one ID only, as the existing mapping does.
+- If this table only refers to something that another table already declares, such as a machine or a lot, link to it with the IRI template the existing mapping uses for it, and do not declare it again here.
+
+Joins:
+- For listed joins only, also emit rr:predicateObjectMap entries that use rr:parentTriplesMap and rr:joinCondition (predicate from ontology/naming); do not invent joins that are not listed.
+"""
+
+
 # A draft may use these without declaring them; the mapping it is added to declares them.
 STANDARD_PREFIXES = {
     "rdf": str(RDF),
@@ -32,6 +63,8 @@ STANDARD_PREFIXES = {
 }
 
 
+# TODO: the mapping context grows with every plant; send only the matching reference mapping.
+PROMPT_CONTEXT_CHARS = 200000
 MAX_REPLY_TOKENS = 32000
 
 
@@ -174,6 +207,34 @@ def _join_lines(info: TableInfo, generation_set: AbstractSet[str]) -> list[str]:
     return lines
 
 
+def _property_lines(ontology_turtle: str) -> list[str]:
+    """How to use each property in the model: a link to a class, or a value of an xsd type."""
+    graph = Graph()
+    try:
+        graph.parse(data=ontology_turtle, format="turtle")
+    except Exception:  # an unparsable ontology still goes into the prompt as text
+        return []
+    lines = []
+    properties = (
+        p for p in graph.subjects(RDF.type, RDF.Property) if isinstance(p, URIRef)
+    )
+    for prop in sorted(properties, key=str):
+        ranges = [r for r in graph.objects(prop, RDFS.range) if isinstance(r, URIRef)]
+        if not ranges:
+            continue
+        name = graph.namespace_manager.normalizeUri(prop)
+        rng = graph.namespace_manager.normalizeUri(ranges[0])
+        if str(ranges[0]).startswith(str(XSD)):
+            lines.append(
+                f"- {name}: a value of type {rng}. Use rr:column with rr:datatype {rng}."
+            )
+        else:
+            lines.append(
+                f"- {name}: a link to a {rng}. Use rr:template or rr:parentTriplesMap."
+            )
+    return lines
+
+
 def _build_prompt(
     info: TableInfo,
     generation_set: AbstractSet[str],
@@ -183,20 +244,7 @@ def _build_prompt(
     mapping_turtle: str,
     prior_error: str | None,
 ) -> list[dict[str, str]]:
-    system = (
-        "You are an R2RML mapping expert. Output ONLY valid Turtle R2RML for a single "
-        "rr:TriplesMap. Name it with exactly the fragment IRI given in the user "
-        "message under 'Use fragment IRI'; do not derive a fragment yourself and do "
-        "not alter the one supplied. "
-        "Include rr:logicalTable with rr:tableName, rr:subjectMap with rr:template and "
-        "rr:class, and rr:predicateObjectMap entries for each column (rr:column object maps). "
-        "You may include rr:datatype on columns when appropriate. "
-        "For listed joins only, also emit rr:predicateObjectMap entries that use "
-        "rr:parentTriplesMap and rr:joinCondition (predicate from ontology/naming); "
-        "do not invent joins that are not listed. Still emit literal rr:column object "
-        "maps for FK columns as well. "
-        "Do not wrap output in markdown fences. Output only Turtle."
-    )
+    system = SYSTEM_PROMPT
 
     user_parts = [
         f"Generate an R2RML TriplesMap for table: {info.full_name}",
@@ -226,16 +274,21 @@ def _build_prompt(
             [
                 "",
                 "Reference ontology (for class/property IRIs):",
-                ontology_turtle[:8000],
+                ontology_turtle[:PROMPT_CONTEXT_CHARS],
             ]
         )
+        property_lines = _property_lines(ontology_turtle)
+        if property_lines:
+            user_parts.extend(
+                ["", "How to use each property in the model:", *property_lines]
+            )
 
     if mapping_turtle.strip():
         user_parts.extend(
             [
                 "",
                 "Existing mapping context (match style, avoid duplicate map IDs):",
-                mapping_turtle[:8000],
+                mapping_turtle[:PROMPT_CONTEXT_CHARS],
             ]
         )
 
