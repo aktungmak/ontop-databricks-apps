@@ -8,13 +8,12 @@ import time
 import uuid
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import Any, Literal, NotRequired, TypedDict, cast
+from typing import Any
 from urllib.parse import quote
 
 from databricks.sdk.service.catalog import TableInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from openai import OpenAI
-from openai.types.responses import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, Field
 from rdflib import RDF, RDFS, XSD, Graph, URIRef
 
@@ -62,21 +61,6 @@ STANDARD_PREFIXES = {
     "xsd": str(XSD),
     "owl": "http://www.w3.org/2002/07/owl#",
 }
-
-
-class CacheControl(TypedDict):
-    type: Literal["ephemeral"]
-
-
-class InputText(TypedDict):
-    type: Literal["input_text"]
-    text: str
-    cache_control: NotRequired[CacheControl]
-
-
-class Message(TypedDict):
-    role: Literal["system", "user"]
-    content: str | list[InputText]
 
 
 # TODO: the mapping context grows with every plant; send only the matching reference mapping.
@@ -259,7 +243,7 @@ def _build_prompt(
     ontology_turtle: str,
     mapping_turtle: str,
     prior_error: str | None,
-) -> list[Message]:
+) -> list[dict[str, Any]]:
     """System prompt, then one user message: the job's fixed context (cached) and this table's task."""
     context: list[str] = []
     if prefixes:
@@ -306,7 +290,7 @@ def _build_prompt(
             ]
         )
 
-    content: list[InputText] = []
+    content: list[dict[str, Any]] = []
     # The same for every table in a job, so the gateway can serve it from the cache.
     if context:
         content.append(
@@ -403,7 +387,7 @@ def _fm_client(token: str) -> OpenAI:
 async def _request_mapping(
     token: str,
     fm_model_name: str,
-    messages: list[Message],
+    messages: list[dict[str, Any]],
     prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
@@ -411,8 +395,7 @@ async def _request_mapping(
     def _call() -> str:
         response = fm.responses.create(
             model=fm_model_name,
-            # cache_control is a gateway extension that the OpenAI types do not know.
-            input=cast(ResponseInputParam, messages),
+            input=messages,
             max_output_tokens=MAX_REPLY_TOKENS,
         )
         if response.status == "incomplete":
