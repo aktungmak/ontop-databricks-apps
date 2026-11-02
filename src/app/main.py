@@ -31,6 +31,8 @@ from sparql_execute import (
     SparqlExecuteError,
     SparqlExecuteSuccess,
     execute_sparql_query,
+    extract_native_sql,
+    reformulate,
 )
 
 logging.basicConfig(
@@ -282,6 +284,52 @@ async def shacl(request: Request) -> Response:
         )
 
     return Response(content=report.serialize(format="turtle"), media_type="text/turtle")
+
+
+@app.post("/sql")
+async def sql(request: Request) -> Response:
+    """The SQL a SPARQL query runs as, without running it.
+
+    For tools that need the SQL, such as a release step that saves queries as views.
+    Not an MCP tool, so agents never get native SQL (see sparql_execute.py).
+    """
+    # Signed-in users only. Reformulating needs no token, so it is not kept.
+    try:
+        get_user_token(request)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        return Response(
+            content=detail, status_code=exc.status_code, media_type="text/plain"
+        )
+
+    query = request.query_params.get("query")
+    if query is None:
+        form = await request.form()
+        value = form.get("query")
+        query = value if isinstance(value, str) else None
+    if not query:
+        return Response(
+            content="Missing required SPARQL request parameter 'query'",
+            status_code=400,
+            media_type="text/plain",
+        )
+
+    result = await reformulate(
+        query, settings, request.app.state.http_client, ontop_manager
+    )
+    if isinstance(result, SparqlExecuteError):
+        return Response(
+            content=result.message,
+            status_code=result.status_code,
+            media_type="text/plain",
+        )
+    if isinstance(result, SparqlExecuteSuccess):
+        return Response(
+            content="Ontop proved this query returns no rows, so it runs no SQL",
+            status_code=422,
+            media_type="text/plain",
+        )
+    return Response(content=extract_native_sql(result), media_type="text/plain")
 
 
 # Keep this catch-all mount last so the FastAPI routes above retain precedence.
