@@ -34,7 +34,7 @@ Structure:
 - Use rr:logicalTable with rr:tableName.
 - Include rr:subjectMap with rr:template and rr:class, and rr:predicateObjectMap entries that state what the data means in the ontology.
 - Follow the patterns in the existing mapping context. You may include rr:datatype on columns when appropriate.
-- A row can describe more than one thing, for example a batch that consumes inputs and produces an output. Write a triples map for each thing the row describes, and map every relationship that the existing mapping maps for the same kind of table.
+- A row can describe more than one thing. Write a triples map for each thing the row describes, and map every relationship that the existing mapping maps for the same kind of table.
 
 Properties:
 - Check each property's rdfs:range in the reference ontology before you use it.
@@ -47,7 +47,7 @@ Columns:
 
 Identity:
 - Declare each kind of thing (give it rr:class and a label) from one ID only, as the existing mapping does.
-- If this table only refers to something that another table already declares, such as a machine or a lot, link to it with the IRI template the existing mapping uses for it, and do not declare it again here.
+- If this table only refers to something that another table already declares, link to it with the IRI template the existing mapping uses for it, and do not declare it again here.
 
 Joins:
 - For listed joins only, also emit rr:predicateObjectMap entries that use rr:parentTriplesMap and rr:joinCondition (predicate from ontology/naming); do not invent joins that are not listed.
@@ -63,7 +63,7 @@ STANDARD_PREFIXES = {
 }
 
 
-# TODO: the mapping context grows with every plant; send only the matching reference mapping.
+# TODO: the mapping context grows with every source; send only the matching reference mapping.
 PROMPT_CONTEXT_CHARS = 200000
 MAX_REPLY_TOKENS = 32000
 
