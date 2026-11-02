@@ -8,12 +8,13 @@ import time
 import uuid
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal, NotRequired, TypedDict, cast
 from urllib.parse import quote
 
 from databricks.sdk.service.catalog import TableInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from openai import OpenAI
+from openai.types.responses import ResponseInputParam
 from pydantic import BaseModel, ConfigDict, Field
 from rdflib import RDF, RDFS, XSD, Graph, URIRef
 
@@ -61,6 +62,21 @@ STANDARD_PREFIXES = {
     "xsd": str(XSD),
     "owl": "http://www.w3.org/2002/07/owl#",
 }
+
+
+class CacheControl(TypedDict):
+    type: Literal["ephemeral"]
+
+
+class InputText(TypedDict):
+    type: Literal["input_text"]
+    text: str
+    cache_control: NotRequired[CacheControl]
+
+
+class Message(TypedDict):
+    role: Literal["system", "user"]
+    content: str | list[InputText]
 
 
 # TODO: the mapping context grows with every plant; send only the matching reference mapping.
@@ -243,57 +259,46 @@ def _build_prompt(
     ontology_turtle: str,
     mapping_turtle: str,
     prior_error: str | None,
-) -> list[dict[str, str]]:
-    system = SYSTEM_PROMPT
+) -> list[Message]:
+    """System prompt, then one user message: the job's fixed context (cached) and this table's task."""
+    context: list[str] = []
+    if prefixes:
+        context.extend(["Prefix declarations to use:", _prefix_block(prefixes), ""])
+    if ontology_turtle.strip():
+        context.extend(
+            [
+                "Reference ontology (for class/property IRIs):",
+                ontology_turtle[:PROMPT_CONTEXT_CHARS],
+                "",
+            ]
+        )
+        if property_lines := _property_lines(ontology_turtle):
+            context.extend(
+                ["How to use each property in the model:", *property_lines, ""]
+            )
+    if mapping_turtle.strip():
+        context.extend(
+            [
+                "Existing mapping context (match style, avoid duplicate map IDs):",
+                mapping_turtle[:PROMPT_CONTEXT_CHARS],
+                "",
+            ]
+        )
 
-    user_parts = [
+    task = [
         f"Generate an R2RML TriplesMap for table: {info.full_name}",
         f"Use fragment IRI: <#{_fragment_iri_from_fqn(info.full_name)}>",
     ]
-
     if info.comment:
-        user_parts.extend(["", f"Table description: {info.comment}"])
-
-    pk_columns = _primary_key_columns(info)
-    if pk_columns:
-        user_parts.extend(["", f"Primary key: {', '.join(pk_columns)}"])
-
-    join_lines = _join_lines(info, generation_set)
-    if join_lines:
-        user_parts.extend(["", "Joins from this table:", *join_lines])
-
-    column_lines = _column_lines(info)
-    if column_lines:
-        user_parts.extend(["", "Columns:", *column_lines])
-
-    if prefixes:
-        user_parts.extend(["", "Prefix declarations to use:", _prefix_block(prefixes)])
-
-    if ontology_turtle.strip():
-        user_parts.extend(
-            [
-                "",
-                "Reference ontology (for class/property IRIs):",
-                ontology_turtle[:PROMPT_CONTEXT_CHARS],
-            ]
-        )
-        property_lines = _property_lines(ontology_turtle)
-        if property_lines:
-            user_parts.extend(
-                ["", "How to use each property in the model:", *property_lines]
-            )
-
-    if mapping_turtle.strip():
-        user_parts.extend(
-            [
-                "",
-                "Existing mapping context (match style, avoid duplicate map IDs):",
-                mapping_turtle[:PROMPT_CONTEXT_CHARS],
-            ]
-        )
-
+        task.extend(["", f"Table description: {info.comment}"])
+    if pk_columns := _primary_key_columns(info):
+        task.extend(["", f"Primary key: {', '.join(pk_columns)}"])
+    if join_lines := _join_lines(info, generation_set):
+        task.extend(["", "Joins from this table:", *join_lines])
+    if column_lines := _column_lines(info):
+        task.extend(["", "Columns:", *column_lines])
     if prior_error:
-        user_parts.extend(
+        task.extend(
             [
                 "",
                 f"Previous attempt failed with: {prior_error}",
@@ -301,9 +306,20 @@ def _build_prompt(
             ]
         )
 
+    content: list[InputText] = []
+    # The same for every table in a job, so the gateway can serve it from the cache.
+    if context:
+        content.append(
+            {
+                "type": "input_text",
+                "text": "\n".join(context),
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    content.append({"type": "input_text", "text": "\n".join(task)})
     return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n".join(user_parts)},
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": content},
     ]
 
 
@@ -387,7 +403,7 @@ def _fm_client(token: str) -> OpenAI:
 async def _request_mapping(
     token: str,
     fm_model_name: str,
-    messages: list[dict[str, str]],
+    messages: list[Message],
     prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
@@ -395,7 +411,8 @@ async def _request_mapping(
     def _call() -> str:
         response = fm.responses.create(
             model=fm_model_name,
-            input=messages,
+            # cache_control is a gateway extension that the OpenAI types do not know.
+            input=cast(ResponseInputParam, messages),
             max_output_tokens=MAX_REPLY_TOKENS,
         )
         if response.status == "incomplete":
@@ -445,12 +462,13 @@ async def _run_job(
     for fqn, info in generation_set.items():
         job.current_table = fqn
         try:
+            # Earlier tables' drafts are left out of the context; in tests they did not help.
             messages = _build_prompt(
                 info,
                 generation_set.keys(),
                 prefixes=body.prefixes,
                 ontology_turtle=body.ontologyTurtle,
-                mapping_turtle=body.mappingTurtle + "\n".join(accumulated),
+                mapping_turtle=body.mappingTurtle,
                 prior_error=prior_errors.get(fqn),
             )
             turtle = await _request_mapping(
