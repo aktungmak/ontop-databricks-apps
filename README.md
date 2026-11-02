@@ -33,6 +33,7 @@ The `mappings/` directory holds the VKG definition that gets uploaded to the UC 
 The app also includes a visual editor that can help you define an R2RML mapping file, accessible at the `/mapper` endpoint. It speeds up the process by pulling data from Unity Catalog to prepopulate fields and can also import your own ontology to prepopulate fields like class and property selections.
 
 It can also use an LLM to automatically generate a mapping for a selection of tables in Unity Catalog.
+The model is called through Unity Gateway as the signed-in user; the bundle variable `fm_model_name` sets the model service.
 Click "Autogenerate", select the tables or schema you want to include, and it will gather context and add the result to your mapping.
 
 Once it is ready, download it to your local machine and use `make run` to upload it and restart the app.
@@ -152,6 +153,7 @@ Bundle variables in `databricks.yml`:
 | `schema` | *(required)* | UC schema for volume and connection default |
 | `instance` | *(required)* | Used to differentiate multiple deployments in the same workspace |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
+| `fm_model_name` | `system.ai.claude-opus-5-5` | Unity Gateway model service that Autogenerate calls |
 | `ontop_version` | `5.5.0` | Ontop release version |
 | `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
 | `jre_version` | `17.0.19_10` | Temurin JRE version |

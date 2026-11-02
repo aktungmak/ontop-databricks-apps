@@ -1,4 +1,4 @@
-"""Async R2RML autogenerate jobs via Foundation Model API (OBO)."""
+"""Async R2RML autogenerate jobs via Unity Gateway (OBO)."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from databricks.sdk.service.catalog import TableInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
+from rdflib import RDF, RDFS, XSD, Graph, URIRef
 
 from obo import get_obo_client_from_token, get_workspace_host
 
@@ -22,6 +23,49 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 JOB_TTL_SECONDS = 3600
+SYSTEM_PROMPT = """\
+You are an R2RML mapping expert. Output ONLY valid Turtle R2RML: one or more rr:TriplesMap for this table. Do not wrap output in markdown fences. Output only Turtle: your whole answer is Turtle, with no reasoning, notes or tags in it.
+
+Naming:
+- Name the first map with exactly the fragment IRI given in the user message under 'Use fragment IRI'.
+- Name any others by adding a suffix to that fragment.
+
+Structure:
+- Use rr:logicalTable with rr:tableName.
+- Include rr:subjectMap with rr:template and rr:class, and rr:predicateObjectMap entries that state what the data means in the ontology.
+- Follow the patterns in the existing mapping context. You may include rr:datatype on columns when appropriate.
+- A row can describe more than one thing. Write a triples map for each thing the row describes, and map every relationship that the existing mapping maps for the same kind of table.
+
+Properties:
+- Check each property's rdfs:range in the reference ontology before you use it.
+- If the range is a class, the object must be a link: use rr:template or rr:parentTriplesMap, never rr:column.
+- If the range is an xsd datatype, the object is a value: use rr:column with rr:datatype.
+
+Columns:
+- Use only the columns listed for this table, with their exact names.
+- Do not copy column names from the existing mapping: other tables have different columns.
+
+Identity:
+- Declare each kind of thing (give it rr:class and a label) from one ID only, as the existing mapping does.
+- If this table only refers to something that another table already declares, link to it with the IRI template the existing mapping uses for it, and do not declare it again here.
+
+Joins:
+- For listed joins only, also emit rr:predicateObjectMap entries that use rr:parentTriplesMap and rr:joinCondition (predicate from ontology/naming); do not invent joins that are not listed.
+"""
+
+
+# A draft may use these without declaring them; the mapping it is added to declares them.
+STANDARD_PREFIXES = {
+    "rdf": str(RDF),
+    "rdfs": str(RDFS),
+    "xsd": str(XSD),
+    "owl": "http://www.w3.org/2002/07/owl#",
+}
+
+
+# TODO: the mapping context grows with every source; send only the matching reference mapping.
+PROMPT_CONTEXT_CHARS = 200000
+MAX_REPLY_TOKENS = 32000
 
 
 @dataclass
@@ -163,6 +207,34 @@ def _join_lines(info: TableInfo, generation_set: AbstractSet[str]) -> list[str]:
     return lines
 
 
+def _property_lines(ontology_turtle: str) -> list[str]:
+    """How to use each property in the model: a link to a class, or a value of an xsd type."""
+    graph = Graph()
+    try:
+        graph.parse(data=ontology_turtle, format="turtle")
+    except Exception:  # an unparsable ontology still goes into the prompt as text
+        return []
+    lines = []
+    properties = (
+        p for p in graph.subjects(RDF.type, RDF.Property) if isinstance(p, URIRef)
+    )
+    for prop in sorted(properties, key=str):
+        ranges = [r for r in graph.objects(prop, RDFS.range) if isinstance(r, URIRef)]
+        if not ranges:
+            continue
+        name = graph.namespace_manager.normalizeUri(prop)
+        rng = graph.namespace_manager.normalizeUri(ranges[0])
+        if str(ranges[0]).startswith(str(XSD)):
+            lines.append(
+                f"- {name}: a value of type {rng}. Use rr:column with rr:datatype {rng}."
+            )
+        else:
+            lines.append(
+                f"- {name}: a link to a {rng}. Use rr:template or rr:parentTriplesMap."
+            )
+    return lines
+
+
 def _build_prompt(
     info: TableInfo,
     generation_set: AbstractSet[str],
@@ -171,65 +243,46 @@ def _build_prompt(
     ontology_turtle: str,
     mapping_turtle: str,
     prior_error: str | None,
-) -> list[dict[str, str]]:
-    system = (
-        "You are an R2RML mapping expert. Output ONLY valid Turtle R2RML for a single "
-        "rr:TriplesMap. Name it with exactly the fragment IRI given in the user "
-        "message under 'Use fragment IRI'; do not derive a fragment yourself and do "
-        "not alter the one supplied. "
-        "Include rr:logicalTable with rr:tableName, rr:subjectMap with rr:template and "
-        "rr:class, and rr:predicateObjectMap entries for each column (rr:column object maps). "
-        "You may include rr:datatype on columns when appropriate. "
-        "For listed joins only, also emit rr:predicateObjectMap entries that use "
-        "rr:parentTriplesMap and rr:joinCondition (predicate from ontology/naming); "
-        "do not invent joins that are not listed. Still emit literal rr:column object "
-        "maps for FK columns as well. "
-        "Do not wrap output in markdown fences. Output only Turtle."
-    )
+) -> list[dict[str, Any]]:
+    """System prompt, then one user message: the job's fixed context (cached) and this table's task."""
+    context: list[str] = []
+    if prefixes:
+        context.extend(["Prefix declarations to use:", _prefix_block(prefixes), ""])
+    if ontology_turtle.strip():
+        context.extend(
+            [
+                "Reference ontology (for class/property IRIs):",
+                ontology_turtle[:PROMPT_CONTEXT_CHARS],
+                "",
+            ]
+        )
+        if property_lines := _property_lines(ontology_turtle):
+            context.extend(
+                ["How to use each property in the model:", *property_lines, ""]
+            )
+    if mapping_turtle.strip():
+        context.extend(
+            [
+                "Existing mapping context (match style, avoid duplicate map IDs):",
+                mapping_turtle[:PROMPT_CONTEXT_CHARS],
+                "",
+            ]
+        )
 
-    user_parts = [
+    task = [
         f"Generate an R2RML TriplesMap for table: {info.full_name}",
         f"Use fragment IRI: <#{_fragment_iri_from_fqn(info.full_name)}>",
     ]
-
     if info.comment:
-        user_parts.extend(["", f"Table description: {info.comment}"])
-
-    pk_columns = _primary_key_columns(info)
-    if pk_columns:
-        user_parts.extend(["", f"Primary key: {', '.join(pk_columns)}"])
-
-    join_lines = _join_lines(info, generation_set)
-    if join_lines:
-        user_parts.extend(["", "Joins from this table:", *join_lines])
-
-    column_lines = _column_lines(info)
-    if column_lines:
-        user_parts.extend(["", "Columns:", *column_lines])
-
-    if prefixes:
-        user_parts.extend(["", "Prefix declarations to use:", _prefix_block(prefixes)])
-
-    if ontology_turtle.strip():
-        user_parts.extend(
-            [
-                "",
-                "Reference ontology (for class/property IRIs):",
-                ontology_turtle[:8000],
-            ]
-        )
-
-    if mapping_turtle.strip():
-        user_parts.extend(
-            [
-                "",
-                "Existing mapping context (match style, avoid duplicate map IDs):",
-                mapping_turtle[:8000],
-            ]
-        )
-
+        task.extend(["", f"Table description: {info.comment}"])
+    if pk_columns := _primary_key_columns(info):
+        task.extend(["", f"Primary key: {', '.join(pk_columns)}"])
+    if join_lines := _join_lines(info, generation_set):
+        task.extend(["", "Joins from this table:", *join_lines])
+    if column_lines := _column_lines(info):
+        task.extend(["", "Columns:", *column_lines])
     if prior_error:
-        user_parts.extend(
+        task.extend(
             [
                 "",
                 f"Previous attempt failed with: {prior_error}",
@@ -237,9 +290,20 @@ def _build_prompt(
             ]
         )
 
+    content = []
+    # The same for every table in a job, so the gateway can serve it from the cache.
+    if context:
+        content.append(
+            {
+                "type": "input_text",
+                "text": "\n".join(context),
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    content.append({"type": "input_text", "text": "\n".join(task)})
     return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": "\n".join(user_parts)},
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": content},
     ]
 
 
@@ -255,13 +319,21 @@ def _extract_turtle(content: str) -> str:
     return text
 
 
-def _light_validate_turtle(turtle: str) -> None:
-    if "rr:TriplesMap" not in turtle and "a rr:TriplesMap" not in turtle:
-        raise ValueError("Response does not contain an rr:TriplesMap")
-    if "rr:logicalTable" not in turtle:
-        raise ValueError("Response missing rr:logicalTable")
-    if len(turtle) < 20:
-        raise ValueError("Response too short to be valid R2RML")
+def _light_validate_turtle(turtle: str, prefixes: dict[str, str] | None = None) -> None:
+    """Parse the reply as Turtle and require at least one triples map (a subject with rr:logicalTable)."""
+    graph = Graph()
+    try:
+        graph.parse(
+            data=_prefix_block(STANDARD_PREFIXES | (prefixes or {})) + "\n" + turtle,
+            format="turtle",
+        )
+    except Exception as exc:  # rdflib raises several parser error types
+        raise ValueError(
+            f"Response is not valid Turtle: {str(exc).splitlines()[0][:200]}"
+        ) from exc
+    logical_table = URIRef("http://www.w3.org/ns/r2rml#logicalTable")
+    if next(graph.subjects(logical_table, None), None) is None:
+        raise ValueError("Response has no rr:TriplesMap with rr:logicalTable")
 
 
 def _resolve_generation_set(
@@ -308,24 +380,31 @@ def _fm_client(token: str) -> OpenAI:
     host = get_workspace_host()
     return OpenAI(
         api_key=token,
-        base_url=f"https://{host}/serving-endpoints",
+        base_url=f"https://{host}/ai-gateway/mlflow/v1",  # "mlflow" here is not MLflow tracking
     )
 
 
 async def _request_mapping(
-    token: str, fm_model_name: str, messages: list[dict[str, str]]
+    token: str,
+    fm_model_name: str,
+    messages: list[dict[str, Any]],
+    prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
 
     def _call() -> str:
-        response = fm.chat.completions.create(
+        response = fm.responses.create(
             model=fm_model_name,
-            messages=messages,
-            max_tokens=8000,
+            input=messages,
+            max_output_tokens=MAX_REPLY_TOKENS,
         )
-        content = response.choices[0].message.content or ""
-        turtle = _extract_turtle(content)
-        _light_validate_turtle(turtle)
+        if response.status == "incomplete":
+            reason = getattr(response.incomplete_details, "reason", None) or "unknown"
+            raise ValueError(
+                f"Model reply was cut off ({reason}) at {MAX_REPLY_TOKENS} output tokens"
+            )
+        turtle = _extract_turtle(response.output_text)
+        _light_validate_turtle(turtle, prefixes)
         return turtle
 
     return await asyncio.to_thread(_call)
@@ -366,15 +445,18 @@ async def _run_job(
     for fqn, info in generation_set.items():
         job.current_table = fqn
         try:
+            # Earlier tables' drafts are left out of the context; in tests they did not help.
             messages = _build_prompt(
                 info,
                 generation_set.keys(),
                 prefixes=body.prefixes,
                 ontology_turtle=body.ontologyTurtle,
-                mapping_turtle=body.mappingTurtle + "\n".join(accumulated),
+                mapping_turtle=body.mappingTurtle,
                 prior_error=prior_errors.get(fqn),
             )
-            turtle = await _request_mapping(token, fm_model_name, messages)
+            turtle = await _request_mapping(
+                token, fm_model_name, messages, body.prefixes
+            )
             accumulated.append(turtle)
             job._success_count += 1
         except Exception as exc:

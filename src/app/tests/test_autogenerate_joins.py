@@ -83,13 +83,13 @@ def _table_info(
     )
 
 
-def _user_message(messages: list[dict[str, str]]) -> str:
-    return messages[1]["content"]
+def _user_message(messages: list[dict[str, Any]]) -> str:
+    return "\n".join(part["text"] for part in messages[1]["content"])
 
 
 def _prompt(
     info: Any, generation_set: AbstractSet[str], **overrides: Any
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {
         "prefixes": {},
         "ontology_turtle": "",
@@ -373,6 +373,22 @@ def test_prompt_includes_context_and_prior_error() -> None:
     assert "Previous attempt failed with: missing rr:logicalTable" in user
 
 
+def test_prompt_puts_the_cached_context_before_the_table() -> None:
+    orders = _table_info("main.sales.orders", columns=[_column("id")])
+
+    context, task = _prompt(
+        orders,
+        {"main.sales.orders"},
+        ontology_turtle="ex:Order a owl:Class .",
+        mapping_turtle="<#main.sales.customers> a rr:TriplesMap .",
+    )[1]["content"]
+
+    assert context["cache_control"] == {"type": "ephemeral"}
+    assert "Reference ontology" in context["text"]
+    assert "cache_control" not in task
+    assert task["text"].startswith("Generate an R2RML TriplesMap for table:")
+
+
 def _listed_table(fqn: str | None) -> Any:
     """Listing stand-in carrying the fully qualified name Unity Catalog reports.
 
@@ -573,7 +589,10 @@ def test_prompt_accepts_the_generation_set_dict_keys() -> None:
 
 
 async def _fake_mapping(
-    token: str, fm_model_name: str, messages: list[dict[str, str]]
+    token: str,
+    fm_model_name: str,
+    messages: list[dict[str, Any]],
+    prefixes: dict[str, str] | None = None,
 ) -> str:
     table = _user_message(messages).split("\n")[0].rsplit(": ", 1)[-1]
     return f"<#{table}> a rr:TriplesMap ."
@@ -643,7 +662,12 @@ def test_job_reports_a_generation_failure_with_the_qualified_name() -> None:
     )
     body = AutogenerateRequest(mode="schema", catalog="main", schema="sales")
 
-    async def _fail(token: str, model: str, messages: list[dict[str, str]]) -> str:
+    async def _fail(
+        token: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        prefixes: dict[str, str] | None = None,
+    ) -> str:
         raise RuntimeError("model refused")
 
     job = _run(client, body, mapping=_fail)
@@ -658,7 +682,12 @@ def test_job_reports_a_generation_failure_with_the_qualified_name() -> None:
 def test_job_passes_the_prior_error_matched_on_the_qualified_name() -> None:
     seen: list[str] = []
 
-    async def _capture(token: str, model: str, messages: list[dict[str, str]]) -> str:
+    async def _capture(
+        token: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        prefixes: dict[str, str] | None = None,
+    ) -> str:
         seen.append(_user_message(messages))
         return await _fake_mapping(token, model, messages)
 
