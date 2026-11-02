@@ -15,6 +15,7 @@ from databricks.sdk.service.catalog import TableInfo
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field
+from rdflib import RDF, RDFS, XSD, Graph, URIRef
 
 from obo import get_obo_client_from_token, get_workspace_host
 
@@ -22,6 +23,15 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 JOB_TTL_SECONDS = 3600
+# A draft may use these without declaring them; the mapping it is added to declares them.
+STANDARD_PREFIXES = {
+    "rdf": str(RDF),
+    "rdfs": str(RDFS),
+    "xsd": str(XSD),
+    "owl": "http://www.w3.org/2002/07/owl#",
+}
+
+
 MAX_REPLY_TOKENS = 32000
 
 
@@ -256,13 +266,21 @@ def _extract_turtle(content: str) -> str:
     return text
 
 
-def _light_validate_turtle(turtle: str) -> None:
-    if "rr:TriplesMap" not in turtle and "a rr:TriplesMap" not in turtle:
-        raise ValueError("Response does not contain an rr:TriplesMap")
-    if "rr:logicalTable" not in turtle:
-        raise ValueError("Response missing rr:logicalTable")
-    if len(turtle) < 20:
-        raise ValueError("Response too short to be valid R2RML")
+def _light_validate_turtle(turtle: str, prefixes: dict[str, str] | None = None) -> None:
+    """Parse the reply as Turtle and require at least one triples map (a subject with rr:logicalTable)."""
+    graph = Graph()
+    try:
+        graph.parse(
+            data=_prefix_block(STANDARD_PREFIXES | (prefixes or {})) + "\n" + turtle,
+            format="turtle",
+        )
+    except Exception as exc:  # rdflib raises several parser error types
+        raise ValueError(
+            f"Response is not valid Turtle: {str(exc).splitlines()[0][:200]}"
+        ) from exc
+    logical_table = URIRef("http://www.w3.org/ns/r2rml#logicalTable")
+    if next(graph.subjects(logical_table, None), None) is None:
+        raise ValueError("Response has no rr:TriplesMap with rr:logicalTable")
 
 
 def _resolve_generation_set(
@@ -314,7 +332,10 @@ def _fm_client(token: str) -> OpenAI:
 
 
 async def _request_mapping(
-    token: str, fm_model_name: str, messages: list[dict[str, str]]
+    token: str,
+    fm_model_name: str,
+    messages: list[dict[str, str]],
+    prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
 
@@ -330,7 +351,7 @@ async def _request_mapping(
                 f"Model reply was cut off ({reason}) at {MAX_REPLY_TOKENS} output tokens"
             )
         turtle = _extract_turtle(response.output_text)
-        _light_validate_turtle(turtle)
+        _light_validate_turtle(turtle, prefixes)
         return turtle
 
     return await asyncio.to_thread(_call)
@@ -379,7 +400,9 @@ async def _run_job(
                 mapping_turtle=body.mappingTurtle + "\n".join(accumulated),
                 prior_error=prior_errors.get(fqn),
             )
-            turtle = await _request_mapping(token, fm_model_name, messages)
+            turtle = await _request_mapping(
+                token, fm_model_name, messages, body.prefixes
+            )
             accumulated.append(turtle)
             job._success_count += 1
         except Exception as exc:

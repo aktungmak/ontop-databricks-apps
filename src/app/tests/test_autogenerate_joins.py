@@ -573,7 +573,10 @@ def test_prompt_accepts_the_generation_set_dict_keys() -> None:
 
 
 async def _fake_mapping(
-    token: str, fm_model_name: str, messages: list[dict[str, str]]
+    token: str,
+    fm_model_name: str,
+    messages: list[dict[str, str]],
+    prefixes: dict[str, str] | None = None,
 ) -> str:
     table = _user_message(messages).split("\n")[0].rsplit(": ", 1)[-1]
     return f"<#{table}> a rr:TriplesMap ."
@@ -643,7 +646,12 @@ def test_job_reports_a_generation_failure_with_the_qualified_name() -> None:
     )
     body = AutogenerateRequest(mode="schema", catalog="main", schema="sales")
 
-    async def _fail(token: str, model: str, messages: list[dict[str, str]]) -> str:
+    async def _fail(
+        token: str,
+        model: str,
+        messages: list[dict[str, str]],
+        prefixes: dict[str, str] | None = None,
+    ) -> str:
         raise RuntimeError("model refused")
 
     job = _run(client, body, mapping=_fail)
@@ -658,7 +666,12 @@ def test_job_reports_a_generation_failure_with_the_qualified_name() -> None:
 def test_job_passes_the_prior_error_matched_on_the_qualified_name() -> None:
     seen: list[str] = []
 
-    async def _capture(token: str, model: str, messages: list[dict[str, str]]) -> str:
+    async def _capture(
+        token: str,
+        model: str,
+        messages: list[dict[str, str]],
+        prefixes: dict[str, str] | None = None,
+    ) -> str:
         seen.append(_user_message(messages))
         return await _fake_mapping(token, model, messages)
 

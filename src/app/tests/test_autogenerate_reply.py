@@ -36,3 +36,20 @@ def test_request_mapping_reports_a_cut_off_reply() -> None:
     with pytest.raises(ValueError, match="cut off \\(max_output_tokens"):
         _request(_fm_returning(TURTLE[:20], "incomplete", "max_output_tokens"))
 
+
+def test_request_mapping_rejects_reasoning_written_into_the_answer() -> None:
+    leaked = (
+        TURTLE
+        + "\n<reasoning>Orders come from the sales table.</reasoning>\n"
+        + TURTLE
+    )
+    with pytest.raises(ValueError, match="not valid Turtle"):
+        _request(_fm_returning(leaked, "completed"))
+
+
+def test_request_mapping_accepts_the_standard_prefixes_undeclared() -> None:
+    reply = TURTLE.replace(
+        " ] .",
+        ' ] ; rr:predicateObjectMap [ rr:predicate rdf:type ; rr:objectMap [ rr:template "x{a}" ] ] .',
+    )
+    assert _request(_fm_returning(reply, "completed")) == reply
