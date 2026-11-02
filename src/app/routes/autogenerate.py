@@ -243,7 +243,7 @@ def _build_prompt(
     ontology_turtle: str,
     mapping_turtle: str,
     prior_error: str | None,
-) -> list[dict[str, Any]]:
+) -> list[dict[str, str]]:
     """System prompt, then one user message: the job's fixed context (cached) and this table's task."""
     context: list[str] = []
     if prefixes:
@@ -290,7 +290,7 @@ def _build_prompt(
             ]
         )
 
-    content: list[dict[str, Any]] = []
+    content = []
     # The same for every table in a job, so the gateway can serve it from the cache.
     if context:
         content.append(
@@ -387,7 +387,7 @@ def _fm_client(token: str) -> OpenAI:
 async def _request_mapping(
     token: str,
     fm_model_name: str,
-    messages: list[dict[str, Any]],
+    messages: list[dict[str, str]],
     prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
