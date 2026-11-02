@@ -22,6 +22,9 @@ variables:
       JVM max heap (-Xmx) for the Ontop CLI, passed via ONTOP_JAVA_ARGS
       (Ontop otherwise defaults to -Xmx512m). Raise if compute_size is LARGE.
     default: "2g"
+  fm_model_name:
+    description: Unity Gateway model service that Autogenerate calls (catalog.schema.service).
+    default: system.ai.claude-opus-5-5
   ontop_version:
     default: "5.5.0"
   jdbc_version:
@@ -118,7 +121,7 @@ targets:
               - name: ONTOP_INTERNAL_PORT
                 value: "18080"
               - name: FM_MODEL_NAME
-                value: databricks-claude-opus-4-6
+                value: ${var.fm_model_name}
               - name: VKG_DEFAULT_CATALOG
                 value: ${var.catalog}
               - name: VKG_DEFAULT_SCHEMA
@@ -131,7 +134,7 @@ targets:
             - catalog.catalogs:read
             - catalog.schemas:read
             - catalog.tables:read
-            - model-serving
+            - ai-gateway
             - sql
           resources:
             - name: sql-warehouse

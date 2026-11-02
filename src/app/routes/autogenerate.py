@@ -1,4 +1,4 @@
-"""Async R2RML autogenerate jobs via Foundation Model API (OBO)."""
+"""Async R2RML autogenerate jobs via Unity Gateway (OBO)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 JOB_TTL_SECONDS = 3600
+MAX_REPLY_TOKENS = 32000
 
 
 @dataclass
@@ -308,7 +309,7 @@ def _fm_client(token: str) -> OpenAI:
     host = get_workspace_host()
     return OpenAI(
         api_key=token,
-        base_url=f"https://{host}/serving-endpoints",
+        base_url=f"https://{host}/ai-gateway/mlflow/v1",  # "mlflow" here is not MLflow tracking
     )
 
 
@@ -318,13 +319,17 @@ async def _request_mapping(
     fm = _fm_client(token)
 
     def _call() -> str:
-        response = fm.chat.completions.create(
+        response = fm.responses.create(
             model=fm_model_name,
-            messages=messages,
-            max_tokens=8000,
+            input=messages,
+            max_output_tokens=MAX_REPLY_TOKENS,
         )
-        content = response.choices[0].message.content or ""
-        turtle = _extract_turtle(content)
+        if response.status == "incomplete":
+            reason = getattr(response.incomplete_details, "reason", None) or "unknown"
+            raise ValueError(
+                f"Model reply was cut off ({reason}) at {MAX_REPLY_TOKENS} output tokens"
+            )
+        turtle = _extract_turtle(response.output_text)
         _light_validate_turtle(turtle)
         return turtle
 
