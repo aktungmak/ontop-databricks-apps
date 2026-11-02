@@ -83,13 +83,13 @@ def _table_info(
     )
 
 
-def _user_message(messages: list[dict[str, str]]) -> str:
+def _user_message(messages: list[dict[str, Any]]) -> str:
     return "\n".join(part["text"] for part in messages[1]["content"])
 
 
 def _prompt(
     info: Any, generation_set: AbstractSet[str], **overrides: Any
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     kwargs: dict[str, Any] = {
         "prefixes": {},
         "ontology_turtle": "",
@@ -591,7 +591,7 @@ def test_prompt_accepts_the_generation_set_dict_keys() -> None:
 async def _fake_mapping(
     token: str,
     fm_model_name: str,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     prefixes: dict[str, str] | None = None,
 ) -> str:
     table = _user_message(messages).split("\n")[0].rsplit(": ", 1)[-1]
@@ -665,7 +665,7 @@ def test_job_reports_a_generation_failure_with_the_qualified_name() -> None:
     async def _fail(
         token: str,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         prefixes: dict[str, str] | None = None,
     ) -> str:
         raise RuntimeError("model refused")
@@ -685,7 +685,7 @@ def test_job_passes_the_prior_error_matched_on_the_qualified_name() -> None:
     async def _capture(
         token: str,
         model: str,
-        messages: list[dict[str, str]],
+        messages: list[dict[str, Any]],
         prefixes: dict[str, str] | None = None,
     ) -> str:
         seen.append(_user_message(messages))

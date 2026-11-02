@@ -243,7 +243,7 @@ def _build_prompt(
     ontology_turtle: str,
     mapping_turtle: str,
     prior_error: str | None,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """System prompt, then one user message: the job's fixed context (cached) and this table's task."""
     context: list[str] = []
     if prefixes:
@@ -387,7 +387,7 @@ def _fm_client(token: str) -> OpenAI:
 async def _request_mapping(
     token: str,
     fm_model_name: str,
-    messages: list[dict[str, str]],
+    messages: list[dict[str, Any]],
     prefixes: dict[str, str] | None = None,
 ) -> str:
     fm = _fm_client(token)
