@@ -268,6 +268,36 @@ async def execute_sparql_query(
     (Ontop or DBSQL). The reformulated native SQL is never included in the error
     result so MCP/HTTP adapters can surface it safely to agents.
     """
+    reformulated = await reformulate(query, settings, http_client, ontop_manager)
+    if not isinstance(reformulated, str):
+        return reformulated
+
+    var_types = extract_variable_types(reformulated)
+    sql = extract_native_sql(reformulated)
+    try:
+        columns, rows = await asyncio.to_thread(run_sql, sql, token, settings)
+    except (RuntimeError, DbsqlError) as exc:
+        logger.exception("Databricks SQL execution failed")
+        message = str(exc)
+        if is_permission_denied(message):
+            return SparqlExecuteError(
+                message=permission_denied_summary(message),
+                status_code=403,
+            )
+        # Non-permission DBSQL/execution failures: surface only the last non-empty
+        # line (never the native SQL or exc.context) as a 502.
+        return SparqlExecuteError(message=_last_line(message), status_code=502)
+
+    return SparqlExecuteSuccess(data=to_sparql_json(columns, rows, var_types))
+
+
+async def reformulate(
+    query: str,
+    settings: Settings,
+    http_client: httpx.AsyncClient,
+    ontop_manager: OntopProcessManager,
+) -> str | SparqlExecuteResult:
+    """Ontop's plan for ``query`` (ending in the native SQL), no rows if Ontop proves it empty, or an error."""
     if not ontop_manager.is_running:
         return SparqlExecuteError(
             message="Ontop is not running",
@@ -322,20 +352,4 @@ async def execute_sparql_query(
         logger.info("Ontop reformulate returned EMPTY IQ; returning no rows")
         return SparqlExecuteSuccess(data=empty)
 
-    var_types = extract_variable_types(upstream.text)
-    sql = extract_native_sql(upstream.text)
-    try:
-        columns, rows = await asyncio.to_thread(run_sql, sql, token, settings)
-    except (RuntimeError, DbsqlError) as exc:
-        logger.exception("Databricks SQL execution failed")
-        message = str(exc)
-        if is_permission_denied(message):
-            return SparqlExecuteError(
-                message=permission_denied_summary(message),
-                status_code=403,
-            )
-        # Non-permission DBSQL/execution failures: surface only the last non-empty
-        # line (never the native SQL or exc.context) as a 502.
-        return SparqlExecuteError(message=_last_line(message), status_code=502)
-
-    return SparqlExecuteSuccess(data=to_sparql_json(columns, rows, var_types))
+    return upstream.text

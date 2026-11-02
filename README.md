@@ -73,6 +73,7 @@ BUNDLE_VAR_catalog=main BUNDLE_VAR_schema=default BUNDLE_VAR_instance=beta make 
 | `/yasgui` | SPARQL query UI |
 | `/sparql` | SPARQL 1.1 endpoint |
 | `/shacl` | SHACL Core validation (`POST`, Turtle shapes graph) |
+| `/sql` | The SQL a SPARQL query runs as, without running it (`POST`, form field `query`; not an MCP tool) |
 | `/mcp` | TBox Toolbox MCP |
 | `/health` | Health check (Ontop + ontology loaded) |
 | `/mapper` | Visual R2RML mapping editor |
