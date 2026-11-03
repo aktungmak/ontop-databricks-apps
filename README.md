@@ -222,7 +222,8 @@ review and adjust these sources before deploying.** Options:
 - **Pre-populate `artifacts/`.** The script skips any file that already exists, so
   placing the JRE tarball, Ontop zip, and `databricks-jdbc-<version>.jar` in
   `artifacts/` by hand makes the deploy fully offline. This is the simplest
-  air-gapped path.
+  air-gapped path. Use the file names for the configured versions: the script
+  removes other versions, because the app picks the first match it finds.
 
 **Verifying downloads.** No checksums are enforced by default. To pin the exact bytes,
 record them once and the script will verify on every subsequent run (failing the deploy
