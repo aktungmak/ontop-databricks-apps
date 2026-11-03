@@ -12,8 +12,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/artifacts"
 
 ONTOP_VERSION="${ONTOP_VERSION:-5.5.0}"
-JDBC_VERSION="${JDBC_VERSION:-3.4.1}"
-JRE_VERSION="${JRE_VERSION:-17.0.19_10}"
+JDBC_VERSION="${JDBC_VERSION:-3.4.4}"
+JRE_VERSION="${JRE_VERSION:-17.0.21_9}"
 
 # Source hosts — override to use an internal mirror / proxy.
 ONTOP_BASE_URL="${ONTOP_BASE_URL:-https://github.com/ontop/ontop/releases/download}"

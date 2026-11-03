@@ -156,8 +156,8 @@ Bundle variables in `databricks.yml`:
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
 | `fm_model_name` | `system.ai.claude-opus-5-5` | Unity Gateway model service that Autogenerate calls |
 | `ontop_version` | `5.5.0` | Ontop release version |
-| `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
-| `jre_version` | `17.0.19_10` | Temurin JRE version |
+| `jdbc_version` | `3.4.4` | Databricks JDBC driver version |
+| `jre_version` | `17.0.21_9` | Temurin JRE version |
 
 Set required variables using the Databricks bundle environment-variable convention:
 `BUNDLE_VAR_catalog`, `BUNDLE_VAR_schema`, and `BUNDLE_VAR_instance`. 

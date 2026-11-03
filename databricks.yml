@@ -28,9 +28,9 @@ variables:
   ontop_version:
     default: "5.5.0"
   jdbc_version:
-    default: "3.4.1"
+    default: "3.4.4"
   jre_version:
-    default: "17.0.19_10"
+    default: "17.0.21_9"
   mapping_file:
     default: mapping.ttl
   ontology_file:
