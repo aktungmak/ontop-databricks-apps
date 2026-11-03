@@ -163,6 +163,9 @@ Bundle variables in `databricks.yml`:
 Set required variables using the Databricks bundle environment-variable convention:
 `BUNDLE_VAR_catalog`, `BUNDLE_VAR_schema`, and `BUNDLE_VAR_instance`. 
 
+To set Ontop's Java heap directly instead, add an `ONTOP_MAX_HEAP` entry (for example
+`3g`) to the app's `env` list in `databricks.yml`.
+
 ## Required Unity Catalog grants
 
 Two types of identities are involved and they need different grants:
@@ -231,13 +234,15 @@ record them once and the script will verify on every subsequent run (failing the
 on a mismatch):
 
 ```bash
-cd artifacts && shasum -a 256 * > SHA256SUMS
+cd artifacts && shasum -a 256 *.zip *.tar.gz *.jar > SHA256SUMS
 ```
+
+Regenerate it after changing a version, since the script removes the old files.
 
 ## Running the tests
 
-The Python tests run in the app's environment from `src/app/uv.lock`, with pytest
-from its `dev` dependency group:
+The Python tests need [uv](https://docs.astral.sh/uv/) and run in the app's environment
+from `src/app/uv.lock`, with pytest from its `dev` dependency group:
 
 ```bash
 make app-test     # app unit tests
