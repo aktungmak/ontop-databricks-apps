@@ -29,10 +29,17 @@ _ARROW_JAVA_OPENS = (
 # Ontop's /ontop/reformulate relies on that path for reformulation failures.
 _SPRING_ERROR_MESSAGE = "-Dserver.error.include-message=always"
 # Ontop's CLI launcher appends -Xmx512m only if ONTOP_JAVA_ARGS has no -Xmx
-# (client/cli/src/main/resources/ontop). Overridable via the ONTOP_MAX_HEAP env
-# var (from the ontop_max_heap bundle variable); this constant is the fallback so
-# a deploy that omits it still gets a sane heap.
+# (client/cli/src/main/resources/ontop), so the heap is always set here. It follows
+# the app's compute_size, which databricks.yml passes in as APP_COMPUTE_SIZE, at
+# about a third of each size's memory (6, 12 and 48 GB). ONTOP_MAX_HEAP overrides it.
+_MAX_HEAP_BY_COMPUTE_SIZE = {"MEDIUM": "2g", "LARGE": "4g", "XLARGE": "16g"}
 _DEFAULT_MAX_HEAP = "2g"
+
+
+def default_max_heap() -> str:
+    """-Xmx value for Ontop's JVM, from the app's compute size."""
+    size = os.environ.get("APP_COMPUTE_SIZE", "").strip().upper()
+    return _MAX_HEAP_BY_COMPUTE_SIZE.get(size, _DEFAULT_MAX_HEAP)
 
 
 class OntopProcessManager:
@@ -272,7 +279,8 @@ class OntopProcessManager:
         # only defaults -Xmx512m when no -Xmx is present, so honor a pre-existing
         # value the same way and avoid emitting two -Xmx flags.
         if "-Xmx" not in existing_java_args:
-            max_heap = os.environ.get("ONTOP_MAX_HEAP", "").strip() or _DEFAULT_MAX_HEAP
+            max_heap = os.environ.get("ONTOP_MAX_HEAP", "").strip() or default_max_heap()
+            logger.info("Ontop max heap: -Xmx%s", max_heap)
             args.append(f"-Xmx{max_heap}")
         args.extend([_ARROW_JAVA_OPENS, _SPRING_ERROR_MESSAGE])
         env["ONTOP_JAVA_ARGS"] = " ".join(args).strip()

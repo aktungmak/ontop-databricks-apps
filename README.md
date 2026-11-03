@@ -154,6 +154,7 @@ Bundle variables in `databricks.yml`:
 | `schema` | *(required)* | UC schema for volume and connection default |
 | `instance` | *(required)* | Used to differentiate multiple deployments in the same workspace |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
+| `compute_size` | `MEDIUM` | Databricks Apps size (`MEDIUM`, `LARGE`, `XLARGE`); Ontop's Java heap follows it: 2 GB, 4 GB or 16 GB |
 | `fm_model_name` | `system.ai.claude-opus-5-5` | Unity Gateway model service that Autogenerate calls |
 | `ontop_version` | `5.5.0` | Ontop release version |
 | `jdbc_version` | `3.4.4` | Databricks JDBC driver version |

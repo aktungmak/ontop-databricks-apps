@@ -10,6 +10,7 @@ from ontop_manager import (
     _DEFAULT_MAX_HEAP,
     _SPRING_ERROR_MESSAGE,
     OntopProcessManager,
+    default_max_heap,
 )
 
 
@@ -35,6 +36,7 @@ def _java_args(monkeypatch, tmp_path: Path) -> str:
 
 def test_default_heap_applied(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.delenv("ONTOP_MAX_HEAP", raising=False)
+    monkeypatch.delenv("APP_COMPUTE_SIZE", raising=False)
     args = _java_args(monkeypatch, tmp_path)
     assert f"-Xmx{_DEFAULT_MAX_HEAP}" in args
     assert _DEFAULT_MAX_HEAP == "2g"
@@ -52,6 +54,7 @@ def test_env_override_wins(monkeypatch, tmp_path: Path) -> None:
 
 def test_blank_override_falls_back_to_default(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("ONTOP_MAX_HEAP", "   ")
+    monkeypatch.delenv("APP_COMPUTE_SIZE", raising=False)
     args = _java_args(monkeypatch, tmp_path)
     assert f"-Xmx{_DEFAULT_MAX_HEAP}" in args
 
@@ -66,3 +69,20 @@ def test_preexisting_xmx_is_respected(monkeypatch, tmp_path: Path) -> None:
     assert "-Xmx2g" not in args
     assert args.count("-Xmx") == 1
     assert "-Dfoo=bar" in args
+
+
+def test_heap_follows_compute_size(monkeypatch) -> None:
+    for size, heap in [("MEDIUM", "2g"), ("LARGE", "4g"), ("XLARGE", "16g"), ("large", "4g")]:
+        monkeypatch.setenv("APP_COMPUTE_SIZE", size)
+        assert default_max_heap() == heap
+
+
+def test_unknown_compute_size_falls_back(monkeypatch) -> None:
+    monkeypatch.setenv("APP_COMPUTE_SIZE", "HUGE")
+    assert default_max_heap() == _DEFAULT_MAX_HEAP
+
+
+def test_compute_size_sets_java_args(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("ONTOP_MAX_HEAP", raising=False)
+    monkeypatch.setenv("APP_COMPUTE_SIZE", "LARGE")
+    assert "-Xmx4g" in _java_args(monkeypatch, tmp_path)
