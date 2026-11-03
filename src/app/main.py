@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlencode
 
-import httpx
+import httpx2
 import uvicorn
 from databricks.sdk import WorkspaceClient
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -81,7 +81,7 @@ async def ontop_lifespan(app: FastAPI):
     )
 
     ontop_manager.start()
-    http_client = httpx.AsyncClient(timeout=120.0)
+    http_client = httpx2.AsyncClient(timeout=120.0)
     app.state.http_client = http_client
 
     configure_mcp(
@@ -159,7 +159,7 @@ async def health(request: Request) -> Response:
             )
             reformulate_responsive = True  # any HTTP reply proves it is not wedged
             reformulate_status = resp.status_code
-        except httpx.RequestError as exc:
+        except httpx2.RequestError as exc:
             detail = f"reformulate unresponsive ({type(exc).__name__}); endpoint may be wedged"
 
     healthy = running and ontology and reformulate_responsive

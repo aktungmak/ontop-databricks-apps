@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs
 
-import httpx
+import httpx2
 
 from config import Settings
 from sparql_execute import execute_sparql_query
@@ -48,7 +48,7 @@ def test_posts_form_encoded_query_to_reformulate() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = "SELECT name FROM customer"
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     with patch("sparql_execute.run_sql", return_value=(["name"], [("Alice",)])):

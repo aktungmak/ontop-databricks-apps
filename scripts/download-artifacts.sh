@@ -3,16 +3,17 @@
 #
 # This fetches binaries from the public internet. Every source host can be
 # overridden so the deploy can be pointed at an internal mirror (see README,
-# "Build-time downloads"). Files already present in artifacts/ are left alone,
-# so an air-gapped deploy can pre-populate that directory instead.
+# "Build-time downloads"). Files already present in artifacts/ for the configured
+# versions are kept, so an air-gapped deploy can pre-populate that directory
+# instead; other versions are removed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/artifacts"
 
 ONTOP_VERSION="${ONTOP_VERSION:-5.5.0}"
-JDBC_VERSION="${JDBC_VERSION:-3.4.1}"
-JRE_VERSION="${JRE_VERSION:-17.0.19_10}"
+JDBC_VERSION="${JDBC_VERSION:-3.4.4}"
+JRE_VERSION="${JRE_VERSION:-17.0.21_9}"
 
 # Source hosts — override to use an internal mirror / proxy.
 ONTOP_BASE_URL="${ONTOP_BASE_URL:-https://github.com/ontop/ontop/releases/download}"
@@ -37,28 +38,33 @@ JDBC_PATH="com/databricks/databricks-jdbc/${JDBC_VERSION}/databricks-jdbc-${JDBC
 
 mkdir -p "${OUT}"
 
-if [[ ! -f "${OUT}/${ONTOP_ZIP}" ]]; then
-  curl -fsSL -o "${OUT}/${ONTOP_ZIP}" "${ONTOP_URL}"
-fi
-
-if [[ ! -f "${OUT}/${JRE_TARBALL}" ]]; then
-  curl -fsSL -o "${OUT}/${JRE_TARBALL}" "${JRE_URL}"
-fi
-
-if [[ ! -f "${OUT}/${JDBC_JAR}" ]]; then
-  # Remove any older databricks-jdbc-*.jar so a version bump does not leave a
-  # stale driver alongside the new one (the app discovers the jar by glob).
-  rm -f "${OUT}"/databricks-jdbc-*.jar
-  if ! curl -fsSL -o "${OUT}/${JDBC_JAR}" "${MAVEN_REPO_URL}/${JDBC_PATH}"; then
-    if [[ -n "${MAVEN_MIRROR_URL}" ]]; then
-      echo "Primary Maven repo failed; falling back to ${MAVEN_MIRROR_URL}" >&2
-      curl -fsSL -o "${OUT}/${JDBC_JAR}" "${MAVEN_MIRROR_URL}/${JDBC_PATH}"
-    else
-      echo "Failed to download the Databricks JDBC driver from ${MAVEN_REPO_URL}" >&2
-      exit 1
+# fetch <file> <other-versions-glob> <url> [fallback-url]
+# Removes every other version matching the glob, since the app takes the first
+# match it finds. Keeps <file> if already present (so artifacts/ can be
+# pre-populated); otherwise tries each URL in turn. Downloads go to <file>.part
+# and are renamed only when complete, so an interrupted download is never reused.
+fetch() {
+  local file="$1" others="$2" old url
+  shift 2
+  for old in "${OUT}"/${others}; do
+    [[ -e "${old}" && "${old}" != "${OUT}/${file}" ]] && rm -f "${old}"
+  done
+  [[ -f "${OUT}/${file}" ]] && return 0
+  for url in "$@"; do
+    if curl -fsSL -o "${OUT}/${file}.part" "${url}"; then
+      mv "${OUT}/${file}.part" "${OUT}/${file}"
+      return 0
     fi
-  fi
-fi
+    echo "Download failed: ${url}" >&2
+  done
+  rm -f "${OUT}/${file}.part"
+  return 1
+}
+
+fetch "${ONTOP_ZIP}" 'ontop-cli-*.zip' "${ONTOP_URL}"
+fetch "${JRE_TARBALL}" 'OpenJDK*jre*.tar.gz' "${JRE_URL}"
+fetch "${JDBC_JAR}" 'databricks-jdbc-*.jar' "${MAVEN_REPO_URL}/${JDBC_PATH}" \
+  ${MAVEN_MIRROR_URL:+"${MAVEN_MIRROR_URL}/${JDBC_PATH}"}
 
 # Optional integrity check: if artifacts/SHA256SUMS exists, verify against it.
 # Generate/refresh with:  cd artifacts && shasum -a 256 * > SHA256SUMS

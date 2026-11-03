@@ -6,7 +6,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 import pytest
 from fastmcp.exceptions import ToolError
 
@@ -40,7 +40,7 @@ def _settings() -> Settings:
 
 def _configure_runtime(
     *,
-    client: httpx.AsyncClient,
+    client: httpx2.AsyncClient,
     manager: MagicMock,
 ) -> None:
     configure(
@@ -72,7 +72,7 @@ def test_get_mcp_user_token_strips_bearer() -> None:
 
 
 def test_execute_sparql_maps_error_without_sql() -> None:
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     manager.is_running = True
     _configure_runtime(client=client, manager=manager)
@@ -97,7 +97,7 @@ def test_execute_sparql_maps_error_without_sql() -> None:
 
 
 def test_execute_sparql_returns_json_on_success() -> None:
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     manager.is_running = True
     _configure_runtime(client=client, manager=manager)
@@ -117,7 +117,7 @@ def test_execute_sparql_returns_json_on_success() -> None:
 
 
 def test_execute_sparql_permission_denied_raises_403() -> None:
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     manager.is_running = True
     _configure_runtime(client=client, manager=manager)
@@ -146,7 +146,7 @@ def test_execute_sparql_permission_denied_raises_403() -> None:
 
 
 def test_check_sparql_unavailable_ontology() -> None:
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     _configure_runtime(client=client, manager=manager)
 

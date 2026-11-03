@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import httpx2
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -65,7 +65,7 @@ class McpRuntime:
     ontology_store: OntologyStore
     ontop_manager: OntopProcessManager
     settings: Settings
-    http_client: httpx.AsyncClient
+    http_client: httpx2.AsyncClient
 
 
 _runtime: McpRuntime | None = None

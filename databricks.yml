@@ -15,22 +15,18 @@ variables:
   compute_size:
     description: >-
       Databricks Apps instance size (MEDIUM | LARGE | XLARGE). MEDIUM
-      (<=2 vCPU / 6 GB) is the platform default. Sized with ontop_max_heap below.
+      (<=2 vCPU / 6 GB) is the platform default. Ontop's Java heap follows it:
+      2 GB on MEDIUM, 4 GB on LARGE, 16 GB on XLARGE.
     default: MEDIUM
-  ontop_max_heap:
-    description: >-
-      JVM max heap (-Xmx) for the Ontop CLI, passed via ONTOP_JAVA_ARGS
-      (Ontop otherwise defaults to -Xmx512m). Raise if compute_size is LARGE.
-    default: "2g"
   fm_model_name:
     description: Unity Gateway model service that Autogenerate calls (catalog.schema.service).
     default: system.ai.claude-opus-5-5
   ontop_version:
     default: "5.5.0"
   jdbc_version:
-    default: "3.4.1"
+    default: "3.4.4"
   jre_version:
-    default: "17.0.19_10"
+    default: "17.0.21_9"
   mapping_file:
     default: mapping.ttl
   ontology_file:
@@ -41,7 +37,6 @@ targets:
     default: true
     mode: production
     workspace:
-      profile: DEFAULT
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
     resources:
       volumes:
@@ -49,12 +44,10 @@ targets:
           catalog_name: ${var.catalog}
           schema_name: ${var.schema}
           name: ontop_vkg_${var.instance}
-          volume_type: MANAGED
 
   mappings:
     mode: production
     workspace:
-      profile: DEFAULT
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
       artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg_${var.instance}/mappings
     artifacts:
@@ -67,7 +60,6 @@ targets:
   app:
     mode: production
     workspace:
-      profile: DEFAULT
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}/${var.instance}
       artifact_path: /Volumes/${var.catalog}/${var.schema}/ontop_vkg_${var.instance}/artifacts
     artifacts:
@@ -87,12 +79,9 @@ targets:
       sql_warehouses:
         ontop_vkg_warehouse:
           name: ontop-vkg-wh-${var.instance}
-          warehouse_type: PRO
           enable_serverless_compute: true
           cluster_size: ${var.warehouse_cluster_size}
           auto_stop_mins: 10
-          min_num_clusters: 1
-          max_num_clusters: 1
           lifecycle:
             started: true
 
@@ -101,7 +90,6 @@ targets:
           name: mcp-ontop-vkg-${var.instance}
           description: Ontop VKG + MCP
           source_code_path: ./src/app
-          # Pin the instance size; sized together with ONTOP_MAX_HEAP below.
           compute_size: ${var.compute_size}
           # config replaces app.yaml wholesale per field, so command and the
           # full env list must both live here.
@@ -118,18 +106,15 @@ targets:
                 value: ${var.mapping_file}
               - name: VKG_ONTOLOGY_FILE
                 value: ${var.ontology_file}
-              - name: ONTOP_INTERNAL_PORT
-                value: "18080"
               - name: FM_MODEL_NAME
                 value: ${var.fm_model_name}
+              # Sets Ontop's Java heap (see ontop_manager.py).
+              - name: APP_COMPUTE_SIZE
+                value: ${var.compute_size}
               - name: VKG_DEFAULT_CATALOG
                 value: ${var.catalog}
               - name: VKG_DEFAULT_SCHEMA
                 value: ${var.schema}
-              # JVM max heap for the Ontop CLI; sized to compute_size above.
-              # Overrides Ontop's -Xmx512m launcher default (see ontop_manager.py).
-              - name: ONTOP_MAX_HEAP
-                value: ${var.ontop_max_heap}
           user_api_scopes:
             - catalog.catalogs:read
             - catalog.schemas:read

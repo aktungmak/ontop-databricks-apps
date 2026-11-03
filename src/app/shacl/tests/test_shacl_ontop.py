@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
-import httpx
+import httpx2
 import pytest
 from rdflib import Graph, Namespace, URIRef
 
@@ -722,7 +722,7 @@ def test_compiled_validator_against_tpch(case: ValidatorCase) -> None:
         )
 
     try:
-        response = httpx.post(
+        response = httpx2.post(
             _sparql_endpoint(),
             headers={
                 "Authorization": f"Bearer {SHACL_IT_TOKEN}",
@@ -732,7 +732,7 @@ def test_compiled_validator_against_tpch(case: ValidatorCase) -> None:
             timeout=120.0,
             follow_redirects=False,
         )
-    except httpx.HTTPError as exc:
+    except httpx2.HTTPError as exc:
         pytest.fail(
             f"{case.name}: /sparql request failed: {exc}"
             + _diagnostics(case, shapes_turtle, compiled)

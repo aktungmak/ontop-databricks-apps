@@ -154,13 +154,17 @@ Bundle variables in `databricks.yml`:
 | `schema` | *(required)* | UC schema for volume and connection default |
 | `instance` | *(required)* | Used to differentiate multiple deployments in the same workspace |
 | `warehouse_cluster_size` | `Small` | SQL warehouse size |
+| `compute_size` | `MEDIUM` | Databricks Apps size (`MEDIUM`, `LARGE`, `XLARGE`); Ontop's Java heap follows it: 2 GB, 4 GB or 16 GB |
 | `fm_model_name` | `system.ai.claude-opus-5-5` | Unity Gateway model service that Autogenerate calls |
 | `ontop_version` | `5.5.0` | Ontop release version |
-| `jdbc_version` | `3.4.1` | Databricks JDBC driver version |
-| `jre_version` | `17.0.19_10` | Temurin JRE version |
+| `jdbc_version` | `3.4.4` | Databricks JDBC driver version |
+| `jre_version` | `17.0.21_9` | Temurin JRE version |
 
 Set required variables using the Databricks bundle environment-variable convention:
 `BUNDLE_VAR_catalog`, `BUNDLE_VAR_schema`, and `BUNDLE_VAR_instance`. 
+
+To set Ontop's Java heap directly instead, add an `ONTOP_MAX_HEAP` entry (for example
+`3g`) to the app's `env` list in `databricks.yml`.
 
 ## Required Unity Catalog grants
 
@@ -222,15 +226,34 @@ review and adjust these sources before deploying.** Options:
 - **Pre-populate `artifacts/`.** The script skips any file that already exists, so
   placing the JRE tarball, Ontop zip, and `databricks-jdbc-<version>.jar` in
   `artifacts/` by hand makes the deploy fully offline. This is the simplest
-  air-gapped path.
+  air-gapped path. Use the file names for the configured versions: the script
+  removes other versions, because the app picks the first match it finds.
 
 **Verifying downloads.** No checksums are enforced by default. To pin the exact bytes,
 record them once and the script will verify on every subsequent run (failing the deploy
 on a mismatch):
 
 ```bash
-cd artifacts && shasum -a 256 * > SHA256SUMS
+cd artifacts && shasum -a 256 *.zip *.tar.gz *.jar > SHA256SUMS
 ```
+
+Regenerate it after changing a version, since the script removes the old files.
+
+## Running the tests
+
+The Python tests need [uv](https://docs.astral.sh/uv/) and run in the app's environment
+from `src/app/uv.lock`, with pytest from its `dev` dependency group:
+
+```bash
+make app-test     # app unit tests
+make shacl-test   # SHACL unit tests
+make ui-test      # mapper tests (needs Node.js)
+make shacl-it     # live SHACL tests against a deployed `shacl-it` instance
+make shacl-it-destroy   # remove that instance
+```
+
+`make shacl-it` deploys its own instance, so it needs the same `BUNDLE_VAR_catalog`
+and `BUNDLE_VAR_schema` variables as a normal deploy.
 
 ## License
 

@@ -13,7 +13,7 @@ import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-import httpx
+import httpx2
 
 from config import Settings
 from sparql_execute import (
@@ -81,7 +81,7 @@ def test_unparseable_query_falls_through() -> None:
 
 def test_execute_sparql_query_rejects_unbound_predicate_before_reformulate() -> None:
     """The guard short-circuits to a 400 without touching the reformulate endpoint."""
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     manager.is_running = True
 

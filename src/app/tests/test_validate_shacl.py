@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import quote
 
-import httpx
+import httpx2
 import pytest
 from fastapi.testclient import TestClient
 from fastmcp.exceptions import ToolError
@@ -57,7 +57,7 @@ def _settings() -> Settings:
 
 
 def _runtime(*, running: bool = True) -> tuple[AsyncMock, MagicMock]:
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     manager = MagicMock()
     manager.is_running = running
     configure(
@@ -412,7 +412,7 @@ def _http_client(*, running: bool = True) -> TestClient:
     manager = MagicMock()
     manager.is_running = running
     main.ontop_manager = manager
-    main.app.state.http_client = AsyncMock(spec=httpx.AsyncClient)
+    main.app.state.http_client = AsyncMock(spec=httpx2.AsyncClient)
     return TestClient(main.app, raise_server_exceptions=False)
 
 

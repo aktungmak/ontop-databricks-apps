@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlencode
 
-import httpx
+import httpx2
 from databricks.sql.exc import Error as DbsqlError, RequestError
 from rdflib.term import Node, URIRef, Variable
 
@@ -259,7 +259,7 @@ async def execute_sparql_query(
     query: str,
     token: str,
     settings: Settings,
-    http_client: httpx.AsyncClient,
+    http_client: httpx2.AsyncClient,
     ontop_manager: OntopProcessManager,
 ) -> SparqlExecuteResult:
     """Reformulate via Ontop, run DBSQL with ``token``, return SPARQL JSON or error.
@@ -294,7 +294,7 @@ async def execute_sparql_query(
 async def reformulate(
     query: str,
     settings: Settings,
-    http_client: httpx.AsyncClient,
+    http_client: httpx2.AsyncClient,
     ontop_manager: OntopProcessManager,
 ) -> str | SparqlExecuteResult:
     """Ontop's plan for ``query`` (ending in the native SQL), no rows if Ontop proves it empty, or an error."""
@@ -321,7 +321,7 @@ async def reformulate(
             headers=_REFORMULATE_HEADERS,
             content=urlencode({"query": query}).encode("utf-8"),
         )
-    except httpx.RequestError:
+    except httpx2.RequestError:
         logger.exception("Failed to reformulate POST request at %s", target)
         return SparqlExecuteError(
             message="Failed to reach Ontop reformulate endpoint",
