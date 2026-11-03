@@ -22,14 +22,14 @@ run: deploy
 	databricks bundle run ontop_vkg -t app --profile $(PROFILE)
 
 app-test:
-	cd src/app && python3 -m pytest tests/ -q
+	cd src/app && uv run python -m pytest tests/ -q
 
 shacl-test:
-	cd src/app && python3 -m pytest shacl/tests -m "not integration" -q
+	cd src/app && uv run python -m pytest shacl/tests -m "not integration" -q
 
 shacl-it:
 	BUNDLE_VAR_instance=shacl-it $(MAKE) run PROFILE=$(PROFILE)
-	python3 scripts/run-shacl-it.py --profile $(PROFILE)
+	uv run --project src/app python scripts/run-shacl-it.py --profile $(PROFILE)
 
 shacl-it-destroy:
 	BUNDLE_VAR_instance=shacl-it $(MAKE) destroy PROFILE=$(PROFILE)

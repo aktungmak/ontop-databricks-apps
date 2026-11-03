@@ -232,6 +232,22 @@ on a mismatch):
 cd artifacts && shasum -a 256 * > SHA256SUMS
 ```
 
+## Running the tests
+
+The Python tests run in the app's environment from `src/app/uv.lock`, with pytest
+from its `dev` dependency group:
+
+```bash
+make app-test     # app unit tests
+make shacl-test   # SHACL unit tests
+make ui-test      # mapper tests (needs Node.js)
+make shacl-it     # live SHACL tests against a deployed `shacl-it` instance
+make shacl-it-destroy   # remove that instance
+```
+
+`make shacl-it` deploys its own instance, so it needs the same `BUNDLE_VAR_catalog`
+and `BUNDLE_VAR_schema` variables as a normal deploy.
+
 ## License
 
 This project is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for details.
