@@ -5,7 +5,7 @@ description = "Ontop Virtual Knowledge Graph served as a Databricks App."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.162.0",
-    "httpx>=0.28.1",
+    "httpx2>=2.16.0",
     "uvicorn>=0.54.0",
     "databricks-sdk>=0.160.0",
     "databricks-sql-connector[pyarrow]>=4.8.0",

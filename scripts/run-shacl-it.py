@@ -17,7 +17,7 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-import httpx
+import httpx2
 from databricks.sdk import WorkspaceClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,7 +43,7 @@ def wait_until_healthy(client: WorkspaceClient, base_url: str) -> None:
     health_url = f"{base_url.rstrip('/')}/health"
     deadline = time.monotonic() + TIMEOUT_SECONDS
     last_status = "no response"
-    with httpx.Client(timeout=15.0) as http:
+    with httpx2.Client(timeout=15.0) as http:
         while time.monotonic() < deadline:
             try:
                 response = http.get(health_url, headers=client.config.authenticate())
@@ -52,7 +52,7 @@ def wait_until_healthy(client: WorkspaceClient, base_url: str) -> None:
                     print(f"App ready: {base_url}", flush=True)
                     return
                 last_status = f"HTTP {response.status_code}; body={payload!r}"
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx2.HTTPError, ValueError) as exc:
                 last_status = f"health unavailable ({type(exc).__name__})"
             print(f"Waiting for {APP_NAME} health: {last_status}", flush=True)
             time.sleep(10)

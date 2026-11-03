@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
+import httpx2
 
 from config import Settings
 from sparql_execute import (
@@ -100,7 +100,7 @@ def _error_has_no_native_sql(result: SparqlExecuteError) -> None:
 def test_ontop_not_running_returns_503() -> None:
     manager = MagicMock()
     manager.is_running = False
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
 
     result = asyncio.run(
         execute_sparql_query(
@@ -119,8 +119,8 @@ def test_ontop_not_running_returns_503() -> None:
 
 
 def test_ontop_unreachable_returns_502_without_sql() -> None:
-    client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.side_effect = httpx.ConnectError("connection refused")
+    client = AsyncMock(spec=httpx2.AsyncClient)
+    client.post.side_effect = httpx2.ConnectError("connection refused")
 
     result = asyncio.run(
         execute_sparql_query(
@@ -145,7 +145,7 @@ def test_ontop_reformulate_error_surfaces_message_not_sql() -> None:
         '{"timestamp":"2026-01-01","status":400,"error":"Bad Request",'
         '"message":"Unsupported SPARQL feature: MINUS","path":"/ontop/reformulate"}'
     )
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     result = asyncio.run(
@@ -224,7 +224,7 @@ def test_ontop_empty_iq_reformulation_returns_no_rows() -> None:
             "path": "/ontop/reformulate",
         }
     )
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     with patch("sparql_execute.run_sql") as run_sql:
@@ -251,7 +251,7 @@ def test_dbsql_failure_surfaces_message_without_native_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     with patch(
@@ -281,7 +281,7 @@ def test_permission_denial_returns_403_summary() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     denial = ServerOperationError(
@@ -311,7 +311,7 @@ def test_non_permission_dbsql_error_returns_502() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     # A server-side error that is NOT a permission denial (no 42501 token).
@@ -341,7 +341,7 @@ def test_non_permission_error_scrubs_native_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     # Multi-line error: SQL echo on earlier lines, useful hint on the last line.
@@ -373,7 +373,7 @@ def test_success_returns_sparql_json_not_sql() -> None:
     upstream = MagicMock()
     upstream.status_code = 200
     upstream.text = CONSTRUCT_REFORMULATE
-    client = AsyncMock(spec=httpx.AsyncClient)
+    client = AsyncMock(spec=httpx2.AsyncClient)
     client.post.return_value = upstream
 
     with patch(

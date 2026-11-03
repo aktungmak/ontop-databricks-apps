@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import httpx
+import httpx2
 from rdflib import Graph, Literal, URIRef
 from rdflib.namespace import RDF, SH
 
@@ -50,7 +50,7 @@ async def run_shacl_validation(
     shape_iri: str,
     token: str,
     settings: Settings,
-    http_client: httpx.AsyncClient,
+    http_client: httpx2.AsyncClient,
     ontop_manager: OntopProcessManager,
     limit: int | None = None,
 ) -> Graph:
